@@ -9,11 +9,12 @@ import com.memex.android.data.model.Approval
 import com.memex.android.data.model.Note
 import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.model.Task
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import retrofit2.HttpException
 
 /**
@@ -86,9 +87,14 @@ class MemexRepositoryImpl(
     private val _runs = MutableStateFlow<List<RoutineRun>>(emptyList())
     override val runs: StateFlow<List<RoutineRun>> = _runs.asStateFlow()
 
-    private val requestGeneration = AtomicLong(0)
-    private var activeGeneration: Long = 0
-    private var currentFilterKey: String? = null
+    private data class CacheState(
+        val generation: Long = 0L,
+        val activeFilterKey: String? = null,
+        val cachedFilterKey: String? = null
+    )
+
+    private val cacheMutex = Mutex()
+    private var cacheState = CacheState()
 
     private suspend fun <T> safeApiCall(block: suspend () -> T): Result<T> {
         return try {
@@ -108,18 +114,25 @@ class MemexRepositoryImpl(
         tag: String?,
         kind: String?
     ): Result<List<Note>> {
-        val filterKey = "${tag.orEmpty()}:${kind.orEmpty()}"
-        val myGen: Long
-        val expectedFilterKey: String?
+        val filterKey = "$tag:$kind"
+        val reqGen: Long
+        val expectedCachedFilter: String?
 
         if (before == null) {
-            myGen = requestGeneration.incrementAndGet()
-            activeGeneration = myGen
-            currentFilterKey = filterKey
-            expectedFilterKey = filterKey
+            reqGen = cacheMutex.withLock {
+                cacheState = cacheState.copy(
+                    generation = cacheState.generation + 1,
+                    activeFilterKey = filterKey
+                )
+                cacheState.generation
+            }
+            expectedCachedFilter = null
         } else {
-            myGen = activeGeneration
-            expectedFilterKey = currentFilterKey
+            val (gen, filter) = cacheMutex.withLock {
+                cacheState.generation to cacheState.cachedFilterKey
+            }
+            reqGen = gen
+            expectedCachedFilter = filter
         }
 
         return safeApiCall {
@@ -129,11 +142,16 @@ class MemexRepositoryImpl(
                 tag = tag,
                 kind = kind
             )
-            if (myGen == activeGeneration) {
+            cacheMutex.withLock {
                 if (before == null) {
-                    _notes.value = response.notes
-                } else if (expectedFilterKey == currentFilterKey && filterKey == currentFilterKey) {
-                    _notes.value = (_notes.value + response.notes).distinctBy { it.id }
+                    if (reqGen == cacheState.generation) {
+                        cacheState = cacheState.copy(cachedFilterKey = filterKey)
+                        _notes.value = response.notes
+                    }
+                } else {
+                    if (reqGen == cacheState.generation && expectedCachedFilter == cacheState.cachedFilterKey && expectedCachedFilter == filterKey) {
+                        _notes.value = (_notes.value + response.notes).distinctBy { it.id }
+                    }
                 }
             }
             response.notes
@@ -144,12 +162,14 @@ class MemexRepositoryImpl(
         return safeApiCall {
             val response = apiService.getNote(id)
             val note = response.note
-            val currentList = _notes.value
-            val index = currentList.indexOfFirst { it.id == id }
-            if (index != -1) {
-                val updated = currentList.toMutableList()
-                updated[index] = note
-                _notes.value = updated
+            cacheMutex.withLock {
+                val currentList = _notes.value
+                val index = currentList.indexOfFirst { it.id == id }
+                if (index != -1) {
+                    val updated = currentList.toMutableList()
+                    updated[index] = note
+                    _notes.value = updated
+                }
             }
             note
         }
@@ -171,12 +191,14 @@ class MemexRepositoryImpl(
                 )
             )
             val updatedNote = response.note
-            val currentList = _notes.value
-            val index = currentList.indexOfFirst { it.id == id }
-            if (index != -1) {
-                val updated = currentList.toMutableList()
-                updated[index] = updatedNote
-                _notes.value = updated
+            cacheMutex.withLock {
+                val currentList = _notes.value
+                val index = currentList.indexOfFirst { it.id == id }
+                if (index != -1) {
+                    val updated = currentList.toMutableList()
+                    updated[index] = updatedNote
+                    _notes.value = updated
+                }
             }
             updatedNote
         }
@@ -186,7 +208,9 @@ class MemexRepositoryImpl(
         return safeApiCall {
             val response = apiService.deleteNote(id)
             val deletedId = response.deleted
-            _notes.value = _notes.value.filter { it.id != deletedId }
+            cacheMutex.withLock {
+                _notes.value = _notes.value.filter { it.id != deletedId }
+            }
             deletedId
         }
     }

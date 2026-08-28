@@ -781,6 +781,183 @@ class MemexRepositoryTest {
     }
 
     @Test
+    fun testInitialQueryFailureOrCancellationPreventsPaginationWithDifferentFilterFromCorruptingCache() = runTest {
+        // Scenario 1: Initial query fails
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(500)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"error": {"code": "server_error", "message": "Internal error"}}""")
+        )
+        val initialFailResult = repository.getNotes(tag = "work")
+        assertTrue(initialFailResult.isFailure)
+        assertTrue(repository.notes.value.isEmpty())
+
+        // Subsequent pagination request with a different filter
+        val personalNotesJson = """
+            {
+                "notes": [
+                    {
+                        "id": "01j6pers1",
+                        "created_at": "2026-08-28T10:00:00Z",
+                        "kind": "capture",
+                        "summary": "Personal note",
+                        "body": "Body",
+                        "tags": ["personal"]
+                    }
+                ]
+            }
+        """.trimIndent()
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(personalNotesJson)
+        )
+        val paginationResult = repository.getNotes(tag = "personal", before = "01j6pers0")
+        assertTrue(paginationResult.isSuccess)
+        assertEquals(1, paginationResult.getOrNull()?.size)
+        // Ensure cache was NOT corrupted / populated by pagination when initial query failed
+        assertTrue(repository.notes.value.isEmpty())
+
+        // Scenario 2: Cancellation
+        val mockService = object : MemexApiService by apiService {
+            override suspend fun getNotes(limit: Int?, before: String?, tag: String?, kind: String?): com.memex.android.data.api.NotesResponse {
+                if (before == null) {
+                    throw kotlinx.coroutines.CancellationException("Query cancelled")
+                }
+                return com.memex.android.data.api.NotesResponse(
+                    notes = listOf(
+                        com.memex.android.data.model.Note(
+                            id = "01j6pers2",
+                            createdAt = "2026-08-28T10:00:00Z",
+                            kind = "capture",
+                            summary = "Personal Note 2",
+                            body = "Body 2"
+                        )
+                    )
+                )
+            }
+        }
+        val cancelRepo = MemexRepositoryImpl(mockService)
+        try {
+            cancelRepo.getNotes(tag = "work")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // expected
+        }
+        assertTrue(cancelRepo.notes.value.isEmpty())
+
+        val cancelPaginationResult = cancelRepo.getNotes(tag = "personal", before = "01j6pers1")
+        assertTrue(cancelPaginationResult.isSuccess)
+        // Cache must remain empty because initial query was cancelled
+        assertTrue(cancelRepo.notes.value.isEmpty())
+    }
+
+    @Test
+    fun testPaginationWithDifferentFilterDoesNotCorruptExistingCache() = runTest {
+        val workNotesJson = """
+            {"notes": [{"id": "01j6work1", "created_at": "2026-08-28T10:00:00Z", "kind": "capture", "summary": "Work note", "body": "Body", "tags": ["work"]}]}
+        """.trimIndent()
+        val personalNotesJson = """
+            {"notes": [{"id": "01j6pers1", "created_at": "2026-08-28T10:00:00Z", "kind": "capture", "summary": "Personal note", "body": "Body", "tags": ["personal"]}]}
+        """.trimIndent()
+
+        mockWebServer.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(workNotesJson)
+        )
+        mockWebServer.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(personalNotesJson)
+        )
+
+        // Populate cache with work notes
+        val workRes = repository.getNotes(tag = "work")
+        assertTrue(workRes.isSuccess)
+        assertEquals(1, repository.notes.value.size)
+        assertEquals("01j6work1", repository.notes.value[0].id)
+
+        // Attempt pagination with a mismatched filter ("personal")
+        val persPaginationRes = repository.getNotes(tag = "personal", before = "01j6pers0")
+        assertTrue(persPaginationRes.isSuccess)
+        assertEquals(1, persPaginationRes.getOrNull()?.size)
+
+        // Cache must remain unchanged (only work note, not corrupted by personal note pagination)
+        assertEquals(1, repository.notes.value.size)
+        assertEquals("01j6work1", repository.notes.value[0].id)
+    }
+
+    @Test
+    fun testOverlappingPaginationAndNewRootQueryDoesNotCorruptCache() = runTest {
+        val page2Deferred = kotlinx.coroutines.CompletableDeferred<com.memex.android.data.api.NotesResponse>()
+        val mockService = object : MemexApiService by apiService {
+            override suspend fun getNotes(limit: Int?, before: String?, tag: String?, kind: String?): com.memex.android.data.api.NotesResponse {
+                return if (before != null) {
+                    page2Deferred.await()
+                } else if (tag == "filter1") {
+                    com.memex.android.data.api.NotesResponse(
+                        notes = listOf(
+                            com.memex.android.data.model.Note(
+                                id = "01j6f1n1",
+                                createdAt = "2026-08-28T10:00:00Z",
+                                kind = "capture",
+                                summary = "F1 N1",
+                                body = "B1"
+                            )
+                        )
+                    )
+                } else {
+                    com.memex.android.data.api.NotesResponse(
+                        notes = listOf(
+                            com.memex.android.data.model.Note(
+                                id = "01j6f2n1",
+                                createdAt = "2026-08-28T10:00:00Z",
+                                kind = "capture",
+                                summary = "F2 N1",
+                                body = "B2"
+                            )
+                        )
+                    )
+                }
+            }
+        }
+        val testRepo = MemexRepositoryImpl(mockService)
+
+        // 1. Initial query with filter1
+        val initRes = testRepo.getNotes(tag = "filter1")
+        assertTrue(initRes.isSuccess)
+        assertEquals("01j6f1n1", testRepo.notes.value.single().id)
+
+        // 2. Start pagination for filter1 in background (delayed)
+        val paginationJob = async { testRepo.getNotes(tag = "filter1", before = "01j6f1n1") }
+        kotlinx.coroutines.yield()
+
+        // 3. User switches filter to filter2 (new root query)
+        val filter2Res = testRepo.getNotes(tag = "filter2")
+        assertTrue(filter2Res.isSuccess)
+        assertEquals("01j6f2n1", testRepo.notes.value.single().id)
+
+        // 4. Delayed pagination for filter1 completes
+        page2Deferred.complete(
+            com.memex.android.data.api.NotesResponse(
+                notes = listOf(
+                    com.memex.android.data.model.Note(
+                        id = "01j6f1n2",
+                        createdAt = "2026-08-28T09:00:00Z",
+                        kind = "capture",
+                        summary = "F1 N2",
+                        body = "B1-2"
+                    )
+                )
+            )
+        )
+        val paginationRes = paginationJob.await()
+        assertTrue(paginationRes.isSuccess)
+
+        // Cache must still contain only filter2 note, stale pagination discarded
+        assertEquals(1, testRepo.notes.value.size)
+        assertEquals("01j6f2n1", testRepo.notes.value.single().id)
+    }
+
+    @Test
     fun testSecureTokenStorage() {
         val storage = InMemorySecureTokenStorage()
         assertNull(storage.getToken())

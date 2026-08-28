@@ -86,8 +86,8 @@ class FeedViewModel(
 
         fetchJob = viewModelScope.launch(dispatcher) {
             _uiState.update {
-                if (refresh) it.copy(isRefreshing = true, errorMessage = null)
-                else it.copy(isLoading = it.notes.isEmpty(), errorMessage = null)
+                if (refresh) it.copy(isRefreshing = true, isLoadingMore = false, errorMessage = null)
+                else it.copy(isLoading = it.notes.isEmpty(), isLoadingMore = false, errorMessage = null)
             }
 
             val currentTag = _uiState.value.selectedTag
@@ -109,6 +109,7 @@ class FeedViewModel(
                         allTags = combinedTags,
                         isLoading = false,
                         isRefreshing = false,
+                        isLoadingMore = false,
                         errorMessage = null
                     )
                 }
@@ -118,6 +119,7 @@ class FeedViewModel(
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
+                        isLoadingMore = false,
                         errorMessage = error.message ?: "Failed to load notes"
                     )
                 }
@@ -133,14 +135,14 @@ class FeedViewModel(
         fetchJob?.cancel()
         paginationJob?.cancel()
         val normalizedKind = if (kind.equals("all", ignoreCase = true)) null else kind
-        _uiState.update { it.copy(selectedKind = normalizedKind) }
+        _uiState.update { it.copy(selectedKind = normalizedKind, isLoadingMore = false) }
         loadNotes()
     }
 
     fun selectTag(tag: String?) {
         fetchJob?.cancel()
         paginationJob?.cancel()
-        _uiState.update { it.copy(selectedTag = tag) }
+        _uiState.update { it.copy(selectedTag = tag, isLoadingMore = false) }
         loadNotes()
     }
 
@@ -156,34 +158,36 @@ class FeedViewModel(
         paginationJob = viewModelScope.launch(dispatcher) {
             _uiState.update { it.copy(isLoadingMore = true, errorMessage = null) }
 
-            val result = withContext(dispatcher) {
-                repository.getNotes(
-                    limit = 20,
-                    before = oldestCreatedAt,
-                    tag = currentTag,
-                    kind = currentKind
-                )
-            }
+            try {
+                val result = withContext(dispatcher) {
+                    repository.getNotes(
+                        limit = 20,
+                        before = oldestCreatedAt,
+                        tag = currentTag,
+                        kind = currentKind
+                    )
+                }
 
-            result.onSuccess { olderNotes ->
-                _uiState.update { current ->
-                    val updatedList = (current.notes + olderNotes).distinctBy { it.id }
-                    val combinedTags = (current.allTags + extractTags(olderNotes)).distinct().sorted()
-                    current.copy(
-                        notes = updatedList,
-                        allTags = combinedTags,
-                        isLoadingMore = false,
-                        errorMessage = null
-                    )
+                result.onSuccess { olderNotes ->
+                    _uiState.update { current ->
+                        val updatedList = (current.notes + olderNotes).distinctBy { it.id }
+                        val combinedTags = (current.allTags + extractTags(olderNotes)).distinct().sorted()
+                        current.copy(
+                            notes = updatedList,
+                            allTags = combinedTags,
+                            errorMessage = null
+                        )
+                    }
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update {
+                        it.copy(
+                            errorMessage = error.message ?: "Failed to load more notes"
+                        )
+                    }
                 }
-            }.onFailure { error ->
-                if (error is CancellationException) throw error
-                _uiState.update {
-                    it.copy(
-                        isLoadingMore = false,
-                        errorMessage = error.message ?: "Failed to load more notes"
-                    )
-                }
+            } finally {
+                _uiState.update { it.copy(isLoadingMore = false) }
             }
         }
     }

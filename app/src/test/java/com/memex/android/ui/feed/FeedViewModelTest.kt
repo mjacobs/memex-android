@@ -184,6 +184,47 @@ class FeedViewModelTest {
     }
 
     @Test
+    fun testPaginationIsLoadingMoreResetOnCancellation() = runTest {
+        viewModel.loadNotes()
+        advanceUntilIdle()
+
+        val slowPaginationDeferred = CompletableDeferred<List<Note>>()
+        val slowRepo = object : FakeMemexRepository() {
+            override suspend fun getNotes(
+                limit: Int?,
+                before: String?,
+                tag: String?,
+                kind: String?
+            ): Result<List<Note>> {
+                return if (before != null) {
+                    Result.success(slowPaginationDeferred.await())
+                } else {
+                    Result.success(notesList)
+                }
+            }
+        }
+        slowRepo.notesList = listOf(sampleNote1, sampleNote2)
+
+        val pagViewModel = FeedViewModel(
+            repository = slowRepo,
+            dispatcher = testDispatcher
+        )
+        pagViewModel.loadNotes()
+        advanceUntilIdle()
+
+        pagViewModel.loadMoreNotes()
+        runCurrent()
+        assertTrue(pagViewModel.uiState.value.isLoadingMore)
+
+        // Cancel pagination by triggering a new loadNotes or filter change
+        pagViewModel.selectKind("capture")
+        runCurrent()
+
+        // isLoadingMore must immediately be reset to false
+        assertFalse(pagViewModel.uiState.value.isLoadingMore)
+    }
+
+    @Test
     fun testPullToRefresh() = runTest {
         viewModel.loadNotes()
         advanceUntilIdle()

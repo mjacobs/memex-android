@@ -10,7 +10,9 @@ import com.memex.android.data.local.AppPreferences
 import com.memex.android.data.local.InMemoryAppPreferences
 import com.memex.android.data.security.InMemorySecureTokenStorage
 import com.memex.android.data.security.SecureTokenStorage
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -723,6 +725,62 @@ class MemexRepositoryTest {
     }
 
     @Test
+    fun testOverlappingOutOfOrderQueriesDoNotCorruptCache() = runTest {
+        val query1Deferred = kotlinx.coroutines.CompletableDeferred<com.memex.android.data.api.NotesResponse>()
+        val query2Notes = listOf(
+            com.memex.android.data.model.Note(
+                id = "01j6query2",
+                createdAt = "2026-08-28T10:00:00Z",
+                kind = "capture",
+                summary = "Query 2 Note",
+                body = "Body 2"
+            )
+        )
+
+        val mockService = object : MemexApiService by apiService {
+            override suspend fun getNotes(limit: Int?, before: String?, tag: String?, kind: String?): com.memex.android.data.api.NotesResponse {
+                return if (tag == "query1") {
+                    query1Deferred.await()
+                } else {
+                    com.memex.android.data.api.NotesResponse(notes = query2Notes)
+                }
+            }
+        }
+        val testRepo = MemexRepositoryImpl(mockService)
+
+        // Launch query 1 (started first, but delayed)
+        val job1 = async { testRepo.getNotes(tag = "query1") }
+        kotlinx.coroutines.yield()
+
+        // Launch and complete query 2 (started second, finishes first)
+        val res2 = testRepo.getNotes(tag = "query2")
+        assertTrue(res2.isSuccess)
+        assertEquals(1, testRepo.notes.value.size)
+        assertEquals("01j6query2", testRepo.notes.value[0].id)
+
+        // Complete query 1 afterwards (stale response)
+        query1Deferred.complete(
+            com.memex.android.data.api.NotesResponse(
+                notes = listOf(
+                    com.memex.android.data.model.Note(
+                        id = "01j6query1",
+                        createdAt = "2026-08-28T09:00:00Z",
+                        kind = "capture",
+                        summary = "Query 1 Note",
+                        body = "Body 1"
+                    )
+                )
+            )
+        )
+        val res1 = job1.await()
+        assertTrue(res1.isSuccess)
+
+        // Verify cache still retains query 2 results and was not corrupted by out-of-order query 1
+        assertEquals(1, testRepo.notes.value.size)
+        assertEquals("01j6query2", testRepo.notes.value[0].id)
+    }
+
+    @Test
     fun testSecureTokenStorage() {
         val storage = InMemorySecureTokenStorage()
         assertNull(storage.getToken())
@@ -734,4 +792,5 @@ class MemexRepositoryTest {
         assertNull(storage.getToken())
     }
 }
+
 

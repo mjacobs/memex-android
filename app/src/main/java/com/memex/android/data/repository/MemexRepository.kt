@@ -9,6 +9,7 @@ import com.memex.android.data.model.Approval
 import com.memex.android.data.model.Note
 import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.model.Task
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -85,6 +86,8 @@ class MemexRepositoryImpl(
     private val _runs = MutableStateFlow<List<RoutineRun>>(emptyList())
     override val runs: StateFlow<List<RoutineRun>> = _runs.asStateFlow()
 
+    private val requestGeneration = AtomicLong(0)
+    private var activeGeneration: Long = 0
     private var currentFilterKey: String? = null
 
     private suspend fun <T> safeApiCall(block: suspend () -> T): Result<T> {
@@ -106,6 +109,19 @@ class MemexRepositoryImpl(
         kind: String?
     ): Result<List<Note>> {
         val filterKey = "${tag.orEmpty()}:${kind.orEmpty()}"
+        val myGen: Long
+        val expectedFilterKey: String?
+
+        if (before == null) {
+            myGen = requestGeneration.incrementAndGet()
+            activeGeneration = myGen
+            currentFilterKey = filterKey
+            expectedFilterKey = filterKey
+        } else {
+            myGen = activeGeneration
+            expectedFilterKey = currentFilterKey
+        }
+
         return safeApiCall {
             val response = apiService.getNotes(
                 limit = limit,
@@ -113,15 +129,11 @@ class MemexRepositoryImpl(
                 tag = tag,
                 kind = kind
             )
-            if (before == null) {
-                currentFilterKey = filterKey
-                _notes.value = response.notes
-            } else {
-                if (currentFilterKey == filterKey) {
-                    _notes.value = (_notes.value + response.notes).distinctBy { it.id }
-                } else {
-                    currentFilterKey = filterKey
+            if (myGen == activeGeneration) {
+                if (before == null) {
                     _notes.value = response.notes
+                } else if (expectedFilterKey == currentFilterKey && filterKey == currentFilterKey) {
+                    _notes.value = (_notes.value + response.notes).distinctBy { it.id }
                 }
             }
             response.notes

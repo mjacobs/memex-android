@@ -1,6 +1,7 @@
 package com.memex.android.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -97,6 +98,9 @@ fun MemexNavGraph(
     }
 
     Scaffold(
+        // Each destination has its own Scaffold and TopAppBar, which apply the status
+        // bar inset themselves. Consuming it here too would indent every screen twice.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             NavigationBar {
                 BOTTOM_DESTINATIONS.forEach { destination ->
@@ -119,9 +123,10 @@ fun MemexNavGraph(
         NavHost(
             navController = navController,
             startDestination = MemexRoutes.FEED,
+            // Only the bottom bar's own height is reserved here.
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(bottom = innerPadding.calculateBottomPadding())
         ) {
             composable(MemexRoutes.FEED) {
                 FeedRoute(

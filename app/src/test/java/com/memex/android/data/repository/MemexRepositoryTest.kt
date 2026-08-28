@@ -958,6 +958,70 @@ class MemexRepositoryTest {
     }
 
     @Test
+    fun testDeleteNoteDuringInFlightFetchNotesDoesNotResurrectNote() = runTest {
+        val getNotesDeferred = kotlinx.coroutines.CompletableDeferred<com.memex.android.data.api.NotesResponse>()
+        val mockService = object : MemexApiService by apiService {
+            override suspend fun getNotes(limit: Int?, before: String?, tag: String?, kind: String?): com.memex.android.data.api.NotesResponse {
+                return getNotesDeferred.await()
+            }
+
+            override suspend fun deleteNote(id: String): com.memex.android.data.api.DeleteNoteResponse {
+                return com.memex.android.data.api.DeleteNoteResponse(deleted = id)
+            }
+        }
+        val testRepo = MemexRepositoryImpl(mockService)
+
+        // 1. Start getNotes (fetchNotes) query in flight
+        val fetchJob = async { testRepo.getNotes() }
+        kotlinx.coroutines.yield()
+
+        // 2. deleteNote executes and succeeds while getNotes is in flight
+        val deleteRes = testRepo.deleteNote("01j6not_deleted")
+        assertTrue(deleteRes.isSuccess)
+        assertEquals("01j6not_deleted", deleteRes.getOrNull())
+
+        // 3. Complete in-flight getNotes returning the note that was deleted
+        getNotesDeferred.complete(
+            com.memex.android.data.api.NotesResponse(
+                notes = listOf(
+                    com.memex.android.data.model.Note(
+                        id = "01j6not_deleted",
+                        createdAt = "2026-08-28T10:00:00Z",
+                        kind = "capture",
+                        summary = "Deleted Note",
+                        body = "Body"
+                    ),
+                    com.memex.android.data.model.Note(
+                        id = "01j6not_survivor",
+                        createdAt = "2026-08-28T10:00:00Z",
+                        kind = "capture",
+                        summary = "Surviving Note",
+                        body = "Body"
+                    )
+                )
+            )
+        )
+        val fetchRes = fetchJob.await()
+        assertTrue(fetchRes.isSuccess)
+
+        // 4. Verify deleted note was NOT resurrected in cached notes
+        assertTrue(testRepo.notes.value.none { it.id == "01j6not_deleted" })
+    }
+
+    @Test
+    fun testNotesFilterKeyDistinctIdentities() {
+        val defaultKey = NotesFilterKey(tag = null, kind = null)
+        val literalNullKey = NotesFilterKey(tag = "null", kind = null)
+        val workCaptureKey = NotesFilterKey(tag = "work", kind = "capture")
+
+        assertFalse(defaultKey == literalNullKey)
+        assertEquals(null, defaultKey.tag)
+        assertEquals("null", literalNullKey.tag)
+        assertEquals("work", workCaptureKey.tag)
+        assertEquals("capture", workCaptureKey.kind)
+    }
+
+    @Test
     fun testSecureTokenStorage() {
         val storage = InMemorySecureTokenStorage()
         assertNull(storage.getToken())

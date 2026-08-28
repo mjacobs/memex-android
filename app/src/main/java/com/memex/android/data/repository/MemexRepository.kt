@@ -18,6 +18,14 @@ import kotlinx.coroutines.sync.withLock
 import retrofit2.HttpException
 
 /**
+ * Filter key identifying a notes query specification.
+ */
+data class NotesFilterKey(
+    val tag: String? = null,
+    val kind: String? = null
+)
+
+/**
  * Main repository interface for accessing Memex notes, tasks, approvals, and routine runs.
  * Provides both suspended network queries returning [Result] and cached [StateFlow] streams.
  */
@@ -89,8 +97,9 @@ class MemexRepositoryImpl(
 
     private data class CacheState(
         val generation: Long = 0L,
-        val activeFilterKey: String? = null,
-        val cachedFilterKey: String? = null
+        val activeFilterKey: NotesFilterKey? = null,
+        val cachedFilterKey: NotesFilterKey? = null,
+        val deletedNoteIds: Set<String> = emptySet()
     )
 
     private val cacheMutex = Mutex()
@@ -114,9 +123,9 @@ class MemexRepositoryImpl(
         tag: String?,
         kind: String?
     ): Result<List<Note>> {
-        val filterKey = "$tag:$kind"
+        val filterKey = NotesFilterKey(tag = tag, kind = kind)
         val reqGen: Long
-        val expectedCachedFilter: String?
+        val expectedCachedFilter: NotesFilterKey?
 
         if (before == null) {
             reqGen = cacheMutex.withLock {
@@ -143,14 +152,15 @@ class MemexRepositoryImpl(
                 kind = kind
             )
             cacheMutex.withLock {
+                val nonDeletedNotes = response.notes.filterNot { it.id in cacheState.deletedNoteIds }
                 if (before == null) {
                     if (reqGen == cacheState.generation) {
                         cacheState = cacheState.copy(cachedFilterKey = filterKey)
-                        _notes.value = response.notes
+                        _notes.value = nonDeletedNotes
                     }
                 } else {
                     if (reqGen == cacheState.generation && expectedCachedFilter == cacheState.cachedFilterKey && expectedCachedFilter == filterKey) {
-                        _notes.value = (_notes.value + response.notes).distinctBy { it.id }
+                        _notes.value = (_notes.value + nonDeletedNotes).distinctBy { it.id }
                     }
                 }
             }
@@ -192,6 +202,7 @@ class MemexRepositoryImpl(
             )
             val updatedNote = response.note
             cacheMutex.withLock {
+                cacheState = cacheState.copy(generation = cacheState.generation + 1)
                 val currentList = _notes.value
                 val index = currentList.indexOfFirst { it.id == id }
                 if (index != -1) {
@@ -209,6 +220,10 @@ class MemexRepositoryImpl(
             val response = apiService.deleteNote(id)
             val deletedId = response.deleted
             cacheMutex.withLock {
+                cacheState = cacheState.copy(
+                    generation = cacheState.generation + 1,
+                    deletedNoteIds = cacheState.deletedNoteIds + deletedId
+                )
                 _notes.value = _notes.value.filter { it.id != deletedId }
             }
             deletedId

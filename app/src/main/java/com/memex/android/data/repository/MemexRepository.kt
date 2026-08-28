@@ -85,6 +85,8 @@ class MemexRepositoryImpl(
     private val _runs = MutableStateFlow<List<RoutineRun>>(emptyList())
     override val runs: StateFlow<List<RoutineRun>> = _runs.asStateFlow()
 
+    private var currentFilterKey: String? = null
+
     private suspend fun <T> safeApiCall(block: suspend () -> T): Result<T> {
         return try {
             Result.success(block())
@@ -103,6 +105,7 @@ class MemexRepositoryImpl(
         tag: String?,
         kind: String?
     ): Result<List<Note>> {
+        val filterKey = "${tag.orEmpty()}:${kind.orEmpty()}"
         return safeApiCall {
             val response = apiService.getNotes(
                 limit = limit,
@@ -110,10 +113,16 @@ class MemexRepositoryImpl(
                 tag = tag,
                 kind = kind
             )
-            if (before != null) {
-                _notes.value = (_notes.value + response.notes).distinctBy { it.id }
-            } else {
+            if (before == null) {
+                currentFilterKey = filterKey
                 _notes.value = response.notes
+            } else {
+                if (currentFilterKey == filterKey) {
+                    _notes.value = (_notes.value + response.notes).distinctBy { it.id }
+                } else {
+                    currentFilterKey = filterKey
+                    _notes.value = response.notes
+                }
             }
             response.notes
         }

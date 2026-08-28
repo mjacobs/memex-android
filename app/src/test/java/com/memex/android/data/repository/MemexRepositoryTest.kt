@@ -683,9 +683,43 @@ class MemexRepositoryTest {
         }
         val testRepo = MemexRepositoryImpl(mockService)
 
-        org.junit.jupiter.api.assertThrows<kotlinx.coroutines.CancellationException> {
+        var caught = false
+        try {
             testRepo.checkHealth()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            caught = true
+            assertEquals("Test cancellation", e.message)
         }
+        assertTrue(caught, "CancellationException should be rethrown by safeApiCall")
+    }
+
+    @Test
+    fun testQueryAwareNotesCachingFilterChange() = runTest {
+        val workNotesJson = """
+            {"notes": [{"id": "01j6work1", "created_at": "2026-08-28T10:00:00Z", "kind": "capture", "summary": "Work note", "body": "Body", "tags": ["work"]}]}
+        """.trimIndent()
+        val personalNotesJson = """
+            {"notes": [{"id": "01j6pers1", "created_at": "2026-08-28T10:00:00Z", "kind": "capture", "summary": "Personal note", "body": "Body", "tags": ["personal"]}]}
+        """.trimIndent()
+
+        mockWebServer.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(workNotesJson)
+        )
+        mockWebServer.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(personalNotesJson)
+        )
+
+        // Query work notes
+        val workRes = repository.getNotes(tag = "work")
+        assertTrue(workRes.isSuccess)
+        assertEquals(1, repository.notes.value.size)
+        assertEquals("01j6work1", repository.notes.value[0].id)
+
+        // Switch filter to personal notes (before == null replaces cache)
+        val persRes = repository.getNotes(tag = "personal")
+        assertTrue(persRes.isSuccess)
+        assertEquals(1, repository.notes.value.size)
+        assertEquals("01j6pers1", repository.notes.value[0].id)
     }
 
     @Test

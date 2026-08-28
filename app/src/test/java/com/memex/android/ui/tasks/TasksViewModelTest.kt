@@ -114,8 +114,9 @@ class TasksViewModelTest {
 
         advanceUntilIdle()
 
+        // Confirmed done: the task leaves the Open tab it no longer matches.
         val settledState = viewModel.uiState.value
-        assertEquals("done", settledState.tasks.first { it.id == "01j6tsk_1" }.status)
+        assertTrue(settledState.tasks.none { it.id == "01j6tsk_1" })
         assertTrue(settledState.pendingToggleIds.isEmpty())
         assertNull(settledState.errorMessage)
         assertEquals("01j6tsk_1" to "done", fakeRepository.lastPatch)
@@ -144,9 +145,14 @@ class TasksViewModelTest {
         advanceUntilIdle()
 
         viewModel.toggleTaskCompletion(doneTask)
+
+        // Optimistic reopen is visible before the request settles.
+        assertEquals("open", viewModel.uiState.value.tasks.first { it.id == "01j6tsk_3" }.status)
+
         advanceUntilIdle()
 
-        assertEquals("open", viewModel.uiState.value.tasks.first { it.id == "01j6tsk_3" }.status)
+        // Reopened: the task leaves the Done tab.
+        assertTrue(viewModel.uiState.value.tasks.none { it.id == "01j6tsk_3" })
         assertEquals("01j6tsk_3" to "open", fakeRepository.lastPatch)
     }
 
@@ -165,8 +171,26 @@ class TasksViewModelTest {
 
         val state = viewModel.uiState.value
         assertTrue(state.pendingToggleIds.isEmpty())
-        assertEquals("done", state.tasks.first { it.id == "01j6tsk_1" }.status)
-        assertEquals("done", state.tasks.first { it.id == "01j6tsk_2" }.status)
+        assertTrue(state.tasks.isEmpty())
+    }
+
+    @Test
+    fun testServerStatusWinsOverTheOptimisticGuess() = runTest {
+        viewModel.selectStatus("done")
+        advanceUntilIdle()
+        assertEquals(listOf("01j6tsk_3"), viewModel.uiState.value.tasks.map { it.id })
+
+        // The server rejects the reopen and returns the task still done: the row is
+        // reconciled in place rather than dropped from the Done tab.
+        fakeRepository.forcedPatchStatus = "done"
+        viewModel.toggleTaskCompletion(doneTask)
+        assertEquals("open", viewModel.uiState.value.tasks.first { it.id == "01j6tsk_3" }.status)
+
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("done", state.tasks.first { it.id == "01j6tsk_3" }.status)
+        assertTrue(state.pendingToggleIds.isEmpty())
     }
 
     @Test
@@ -202,6 +226,8 @@ class TasksViewModelTest {
         var tasksList: List<Task> = emptyList()
         var shouldFailLoad: Boolean = false
         var shouldFailPatch: Boolean = false
+        /** Status the fake server returns regardless of what was requested. */
+        var forcedPatchStatus: String? = null
         var errorMessage: String = "Repository error"
 
         var lastStatusQuery: String? = null
@@ -259,7 +285,7 @@ class TasksViewModelTest {
                 ?: return Result.failure(Exception("Task not found"))
             val updated = existing.copy(
                 title = title ?: existing.title,
-                status = status ?: existing.status,
+                status = forcedPatchStatus ?: status ?: existing.status,
                 tags = tags ?: existing.tags,
                 updatedAt = "2026-08-28T13:00:00Z"
             )

@@ -238,8 +238,8 @@ fun ApprovalCard(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            val proposedTitle = approval.action?.task?.title
-            if (!proposedTitle.isNullOrBlank()) {
+            val proposedTask = approval.action?.task
+            if (proposedTask != null && proposedTask.title.isNotBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     shape = RoundedCornerShape(8.dp),
@@ -248,15 +248,14 @@ fun ApprovalCard(
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
                         Text(
-                            text = proposedTitle,
+                            text = proposedTask.title,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium
                         )
-                        val proposedTags = approval.action.task.tags
-                        if (proposedTags.isNotEmpty()) {
+                        if (proposedTask.tags.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                proposedTags.forEach { tag -> TagChip(tag = tag) }
+                                proposedTask.tags.forEach { tag -> TagChip(tag = tag) }
                             }
                         }
                     }

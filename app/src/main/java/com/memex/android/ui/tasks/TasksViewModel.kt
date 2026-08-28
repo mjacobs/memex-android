@@ -118,8 +118,15 @@ class TasksViewModel(
 
             result.onSuccess { updatedTask ->
                 _uiState.update { state ->
+                    // The tabs are a status filter, so a confirmed toggle either updates
+                    // the row in place or drops it out of the tab it no longer belongs to.
+                    val tasks = if (updatedTask.status == state.selectedStatus) {
+                        state.tasks.map { if (it.id == task.id) updatedTask else it }
+                    } else {
+                        state.tasks.filterNot { it.id == task.id }
+                    }
                     state.copy(
-                        tasks = state.tasks.map { if (it.id == task.id) updatedTask else it },
+                        tasks = tasks,
                         pendingToggleIds = state.pendingToggleIds - task.id,
                         errorMessage = null
                     )

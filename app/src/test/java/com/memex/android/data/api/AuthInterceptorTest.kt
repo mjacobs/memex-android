@@ -85,6 +85,49 @@ class AuthInterceptorTest {
     }
 
     @Test
+    fun testKeyIsWithheldFromAServerItWasNotEnteredFor() = runTest {
+        enqueueHealth()
+        val baseUrl = mockWebServer.url("/").toString()
+        val boundStorage = InMemorySecureTokenStorage(
+            initialToken = "device-key",
+            initialOrigin = "https://memex.example.com/"
+        )
+        val service = ApiClient.createApiService(
+            baseUrl = baseUrl,
+            // Even with the configured server pointing here, the key belongs elsewhere.
+            okHttpClient = ApiClient.createOkHttpClient(
+                tokenStorage = boundStorage,
+                allowedOrigin = { baseUrl }
+            )
+        )
+
+        service.getHealth()
+
+        assertNull(mockWebServer.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun testKeyIsAttachedToTheServerItWasEnteredFor() = runTest {
+        enqueueHealth()
+        val baseUrl = mockWebServer.url("/").toString()
+        val boundStorage = InMemorySecureTokenStorage(
+            initialToken = "device-key",
+            initialOrigin = baseUrl
+        )
+        val service = ApiClient.createApiService(
+            baseUrl = baseUrl,
+            okHttpClient = ApiClient.createOkHttpClient(
+                tokenStorage = boundStorage,
+                allowedOrigin = { baseUrl }
+            )
+        )
+
+        service.getHealth()
+
+        assertEquals("Bearer device-key", mockWebServer.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
     fun testOriginComparisonIgnoresPathAndQuery() {
         assertEquals(
             AuthInterceptor.originOf("https://memex.example.com/"),

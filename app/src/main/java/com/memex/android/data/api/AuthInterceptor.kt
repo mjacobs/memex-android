@@ -25,9 +25,15 @@ class AuthInterceptor(
         val token = tokenStorage.getToken()
 
         val requestBuilder = originalRequest.newBuilder()
-        val mayAuthenticate = allowedOrigin()
-            ?.let { origin -> originOf(origin) == originOf(originalRequest.url.toString()) }
-            ?: true
+        val requestOrigin = originOf(originalRequest.url.toString())
+        val configuredOrigin = allowedOrigin()?.let { originOf(it) }
+        // A key that knows where it came from is never sent anywhere else, whatever the
+        // configured URL later becomes. A key with no recorded origin predates that
+        // binding and is governed by the configured-server check alone.
+        val keyOrigin = tokenStorage.getTokenOrigin()?.let { originOf(it) }
+
+        val mayAuthenticate = (configuredOrigin == null || configuredOrigin == requestOrigin) &&
+            (keyOrigin == null || keyOrigin == requestOrigin)
 
         if (mayAuthenticate &&
             !token.isNullOrBlank() &&

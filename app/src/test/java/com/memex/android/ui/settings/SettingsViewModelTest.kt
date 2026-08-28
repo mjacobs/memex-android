@@ -42,7 +42,10 @@ class SettingsViewModelTest {
     @BeforeEach
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
-        tokenStorage = InMemorySecureTokenStorage(initialToken = "original-device-key")
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "original-device-key",
+            initialOrigin = "https://memex.example.com/"
+        )
         appPreferences = InMemoryAppPreferences(initialServerUrl = "https://memex.example.com/")
         testedUrls = mutableListOf()
         testedTokens = mutableListOf()
@@ -122,6 +125,18 @@ class SettingsViewModelTest {
         assertEquals(listOf<String?>("new-device-key"), testedTokens)
         // The entered key is dropped from UI state once stored.
         assertEquals("", viewModel.uiState.value.tokenInput)
+    }
+
+    @Test
+    fun testSavedKeyRecordsTheServerItWasEnteredFor() = runTest {
+        val viewModel = viewModel()
+
+        viewModel.updateServerUrl("https://other-memex.example.com/")
+        viewModel.updateTokenInput("new-device-key")
+        viewModel.saveAndTestConnection()
+        advanceUntilIdle()
+
+        assertEquals("https://other-memex.example.com/", tokenStorage.getTokenOrigin())
     }
 
     @Test

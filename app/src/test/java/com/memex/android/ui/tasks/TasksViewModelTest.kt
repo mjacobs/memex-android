@@ -5,6 +5,7 @@ import com.memex.android.data.model.Note
 import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.model.Task
 import com.memex.android.data.repository.MemexRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -225,6 +226,30 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun testStaleTabFetchCannotOverwriteAConfirmedToggle() = runTest {
+        viewModel.loadTasks()
+        advanceUntilIdle()
+
+        // A tab fetch reads the pre-toggle list, then parks before delivering it.
+        val gate = CompletableDeferred<Unit>()
+        fakeRepository.gateNextFetch = gate
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        // The toggle completes while that fetch is still in flight.
+        viewModel.toggleTaskCompletion(openTask1)
+        advanceUntilIdle()
+
+        // Releasing the stale response must not resurrect the completed task.
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.tasks.none { it.id == "01j6tsk_1" })
+        assertEquals(listOf("01j6tsk_2"), state.tasks.map { it.id })
+    }
+
+    @Test
     fun testLoadFailureSurfacesErrorMessage() = runTest {
         fakeRepository.shouldFailLoad = true
 
@@ -264,6 +289,8 @@ class TasksViewModelTest {
         var lastStatusQuery: String? = null
         var lastPatch: Pair<String, String?>? = null
         var getTasksCallCount: Int = 0
+        /** Parks the next fetch after it has read the list, to stage a stale response. */
+        var gateNextFetch: CompletableDeferred<Unit>? = null
 
         private val _notesFlow = MutableStateFlow<List<Note>>(emptyList())
         override val notes: StateFlow<List<Note>> = _notesFlow.asStateFlow()
@@ -301,7 +328,13 @@ class TasksViewModelTest {
             getTasksCallCount++
             lastStatusQuery = status
             if (shouldFailLoad) return Result.failure(Exception(errorMessage))
+            // Snapshot first, then park: the response this fetch delivers is the list as
+            // it was before anything that happens while it is suspended.
             val filtered = tasksList.filter { status == null || it.status == status }
+            gateNextFetch?.let { gate ->
+                gateNextFetch = null
+                gate.await()
+            }
             _tasksFlow.value = filtered
             return Result.success(filtered)
         }

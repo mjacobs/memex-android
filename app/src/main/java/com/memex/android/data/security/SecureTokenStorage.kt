@@ -10,7 +10,16 @@ import androidx.security.crypto.MasterKey
  */
 interface SecureTokenStorage {
     fun getToken(): String?
-    fun setToken(token: String?)
+
+    /**
+     * The server the stored key was entered for, when known. A key that records its
+     * origin can never be attached to a request bound somewhere else, however the
+     * configured server URL later changes.
+     */
+    fun getTokenOrigin(): String?
+
+    fun setToken(token: String?, origin: String? = null)
+
     fun clearToken()
 }
 
@@ -41,21 +50,38 @@ class EncryptedSecureTokenStorage(
         return sharedPreferences.getString(KEY_AUTH_TOKEN, null)
     }
 
-    override fun setToken(token: String?) {
+    override fun getTokenOrigin(): String? {
+        return sharedPreferences.getString(KEY_AUTH_TOKEN_ORIGIN, null)
+    }
+
+    override fun setToken(token: String?, origin: String?) {
         if (token.isNullOrBlank()) {
             clearToken()
         } else {
-            sharedPreferences.edit().putString(KEY_AUTH_TOKEN, token.trim()).apply()
+            sharedPreferences.edit()
+                .putString(KEY_AUTH_TOKEN, token.trim())
+                .apply {
+                    if (origin.isNullOrBlank()) {
+                        remove(KEY_AUTH_TOKEN_ORIGIN)
+                    } else {
+                        putString(KEY_AUTH_TOKEN_ORIGIN, origin.trim())
+                    }
+                }
+                .apply()
         }
     }
 
     override fun clearToken() {
-        sharedPreferences.edit().remove(KEY_AUTH_TOKEN).apply()
+        sharedPreferences.edit()
+            .remove(KEY_AUTH_TOKEN)
+            .remove(KEY_AUTH_TOKEN_ORIGIN)
+            .apply()
     }
 
     companion object {
         const val PREFS_NAME = "memex_secure_prefs"
         private const val KEY_AUTH_TOKEN = "auth_bearer_token"
+        private const val KEY_AUTH_TOKEN_ORIGIN = "auth_bearer_token_origin"
     }
 }
 
@@ -63,17 +89,27 @@ class EncryptedSecureTokenStorage(
  * In-memory implementation of [SecureTokenStorage] for testing and mocking.
  */
 class InMemorySecureTokenStorage(
-    initialToken: String? = null
+    initialToken: String? = null,
+    initialOrigin: String? = null
 ) : SecureTokenStorage {
     private var token: String? = initialToken
+    private var origin: String? = initialOrigin
 
     override fun getToken(): String? = token
 
-    override fun setToken(token: String?) {
-        this.token = if (token.isNullOrBlank()) null else token.trim()
+    override fun getTokenOrigin(): String? = origin
+
+    override fun setToken(token: String?, origin: String?) {
+        if (token.isNullOrBlank()) {
+            clearToken()
+        } else {
+            this.token = token.trim()
+            this.origin = origin?.trim()?.takeIf { it.isNotEmpty() }
+        }
     }
 
     override fun clearToken() {
         this.token = null
+        this.origin = null
     }
 }

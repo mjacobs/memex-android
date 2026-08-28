@@ -98,8 +98,10 @@ class SettingsViewModel(
             return
         }
 
-        val previousUrl = appPreferences.serverUrl
-        val originChanged = originOf(normalizedUrl) != originOf(previousUrl)
+        // What matters is the origin the stored key was issued for, not merely the URL
+        // that happened to be configured last.
+        val keyOrigin = tokenStorage.getTokenOrigin() ?: appPreferences.serverUrl
+        val originChanged = originOf(normalizedUrl) != originOf(keyOrigin)
         val enteredToken = state.tokenInput.takeIf { it.isNotBlank() }
 
         // A key belongs to the server it was issued for; never forward it to a new one.
@@ -111,7 +113,7 @@ class SettingsViewModel(
 
         appPreferences.serverUrl = normalizedUrl
         if (enteredToken != null) {
-            tokenStorage.setToken(enteredToken)
+            tokenStorage.setToken(enteredToken, normalizedUrl)
         }
 
         val token = tokenStorage.getToken()

@@ -29,6 +29,7 @@ class SharedPreferencesAppPreferences(
         // Validated on read as well as on write: a value stored by any other path must
         // not be able to break the API client before Settings is reachable.
         get() = sharedPreferences.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL)
+            ?.trim()
             ?.takeIf { isUsableServerUrl(it) }
             ?: DEFAULT_SERVER_URL
         set(value) {

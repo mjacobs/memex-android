@@ -5,6 +5,7 @@ import com.memex.android.data.model.Capture
 import com.memex.android.data.model.Note
 import com.memex.android.data.repository.CaptureRepository
 import com.memex.android.util.AudioRecorder
+import com.memex.android.util.CompressedImage
 import com.memex.android.util.ImageCompressor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.io.InputStream
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CaptureViewModelTest {
@@ -358,8 +360,15 @@ class CaptureViewModelTest {
     }
 
     private class FakeImageCompressor : ImageCompressor {
-        override fun compress(imageBytes: ByteArray, maxBytes: Long): ByteArray = imageBytes
-        override fun compressBitmap(bitmap: android.graphics.Bitmap, maxBytes: Long): ByteArray = byteArrayOf()
+        override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage =
+            CompressedImage(bytes = imageBytes, base64 = "base64_encoded_dummy")
+
+        override fun compressStream(openStream: () -> InputStream?, maxBytes: Long): CompressedImage =
+            CompressedImage(bytes = byteArrayOf(1, 2, 3), base64 = "base64_encoded_dummy")
+
+        override fun compressBitmap(bitmap: android.graphics.Bitmap, maxBytes: Long): CompressedImage =
+            CompressedImage(bytes = byteArrayOf(), base64 = "base64_encoded_dummy")
+
         override fun compressToBase64(imageBytes: ByteArray, maxBytes: Long): String = "base64_encoded_dummy"
     }
 }

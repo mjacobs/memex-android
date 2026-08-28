@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.IOException
 
 /**
  * Capture modes supported in the Quick Capture interface.
@@ -160,17 +159,14 @@ class CaptureViewModel(
 
         compressionJob = viewModelScope.launch {
             try {
-                val compressedBytes = withContext(defaultDispatcher) {
+                val compressed = withContext(defaultDispatcher) {
                     imageCompressor.compress(bytes)
-                }
-                val base64 = withContext(defaultDispatcher) {
-                    imageCompressor.compressToBase64(compressedBytes)
                 }
                 _viewState.update {
                     it.copy(
                         isProcessingImage = false,
-                        selectedImageBytes = compressedBytes,
-                        selectedImageBase64 = base64,
+                        selectedImageBytes = compressed.bytes,
+                        selectedImageBase64 = compressed.base64,
                         errorMessage = null
                     )
                 }
@@ -200,22 +196,15 @@ class CaptureViewModel(
 
         compressionJob = viewModelScope.launch {
             try {
-                val rawBytes = withContext(ioDispatcher) {
-                    contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                } ?: throw IOException("Could not read image data from URI")
-
-                val compressedBytes = withContext(defaultDispatcher) {
-                    imageCompressor.compress(rawBytes)
-                }
-                val base64 = withContext(defaultDispatcher) {
-                    imageCompressor.compressToBase64(compressedBytes)
+                val compressed = withContext(ioDispatcher) {
+                    imageCompressor.compressStream(openStream = { contentResolver.openInputStream(uri) })
                 }
 
                 _viewState.update {
                     it.copy(
                         isProcessingImage = false,
-                        selectedImageBytes = compressedBytes,
-                        selectedImageBase64 = base64,
+                        selectedImageBytes = compressed.bytes,
+                        selectedImageBase64 = compressed.base64,
                         errorMessage = null
                     )
                 }

@@ -136,7 +136,14 @@ class MainActivity : ComponentActivity() {
 
     private val tokenStorage by lazy { EncryptedSecureTokenStorage(applicationContext) }
     private val appPreferences by lazy { SharedPreferencesAppPreferences(applicationContext) }
-    private val okHttpClient by lazy { ApiClient.createOkHttpClient(tokenStorage) }
+    private val okHttpClient by lazy {
+        ApiClient.createOkHttpClient(
+            tokenStorage = tokenStorage,
+            // The key travels only to the currently configured server, even if this
+            // client was built before the user pointed the app somewhere else.
+            allowedOrigin = { appPreferences.serverUrl }
+        )
+    }
     private val apiService by lazy {
         ApiClient.createApiService(
             baseUrl = appPreferences.serverUrl,

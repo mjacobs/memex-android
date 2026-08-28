@@ -2,6 +2,7 @@ package com.memex.android.data.local
 
 import android.content.Context
 import android.content.SharedPreferences
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Interface for non-secret user preferences (e.g. server URL, device ID).
@@ -25,9 +26,14 @@ class SharedPreferencesAppPreferences(
     }
 
     override var serverUrl: String
-        get() = sharedPreferences.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
+        // Validated on read as well as on write: a value stored by any other path must
+        // not be able to break the API client before Settings is reachable.
+        get() = sharedPreferences.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL)
+            ?.takeIf { isUsableServerUrl(it) }
+            ?: DEFAULT_SERVER_URL
         set(value) {
-            val normalized = if (value.isBlank()) DEFAULT_SERVER_URL else value.trim()
+            val trimmed = value.trim()
+            val normalized = if (isUsableServerUrl(trimmed)) trimmed else DEFAULT_SERVER_URL
             sharedPreferences.edit().putString(KEY_SERVER_URL, normalized).apply()
         }
 
@@ -43,6 +49,12 @@ class SharedPreferencesAppPreferences(
     }
 
     companion object {
+        /** True when Retrofit can build a client for this URL. */
+        fun isUsableServerUrl(url: String): Boolean {
+            val parsed = url.trim().toHttpUrlOrNull() ?: return false
+            return (parsed.scheme == "http" || parsed.scheme == "https") && parsed.host.isNotBlank()
+        }
+
         const val PREFS_NAME = "memex_app_prefs"
         const val DEFAULT_SERVER_URL = "https://memex-PROJECT_NUMBER.us-central1.run.app"
         const val DEFAULT_DEVICE_ID = "android"

@@ -135,6 +135,10 @@ class TasksViewModel(
                         errorMessage = null
                     )
                 }
+                // A tab fetch started before this PATCH would return pre-toggle data and
+                // overwrite the list. Refetching now cancels any such in-flight request
+                // and settles the tab on server truth.
+                loadTasks(refresh = true)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 _uiState.update { state ->

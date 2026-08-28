@@ -53,6 +53,8 @@ class MemexUiInstrumentationTest {
 
     private var originalServerUrl: String = SharedPreferencesAppPreferences.DEFAULT_SERVER_URL
     private var originalToken: String? = null
+    private var serverUrlOverridden = false
+    private var tokenOverridden = false
 
     private lateinit var state: FakeBackendState
 
@@ -71,8 +73,12 @@ class MemexUiInstrumentationTest {
         mockWebServer.start()
 
         // Point the app at the loopback mock BEFORE the activity reads the preference.
+        // Each override is flagged only once it has actually happened, so teardown never
+        // "restores" a setting this test did not replace.
         appPreferences.serverUrl = mockWebServer.url("/").toString()
+        serverUrlOverridden = true
         tokenStorage.setToken(INSTRUMENTATION_TOKEN)
+        tokenOverridden = true
 
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
@@ -86,13 +92,19 @@ class MemexUiInstrumentationTest {
             try {
                 if (::mockWebServer.isInitialized) mockWebServer.shutdown()
             } finally {
-                // Restoring the production URL and the real key must happen even when
-                // setup or shutdown threw, or the device is left pointed at a dead mock.
-                if (::appPreferences.isInitialized) {
-                    appPreferences.serverUrl = originalServerUrl
-                }
-                if (::tokenStorage.isInitialized) {
-                    tokenStorage.setToken(originalToken)
+                // Restoring must happen even when setup or shutdown threw, or the device
+                // is left pointed at a dead mock with a test key on it. The token restore
+                // is nested in a finally so a failed URL restore cannot skip it.
+                try {
+                    if (serverUrlOverridden) {
+                        serverUrlOverridden = false
+                        appPreferences.serverUrl = originalServerUrl
+                    }
+                } finally {
+                    if (tokenOverridden) {
+                        tokenOverridden = false
+                        tokenStorage.setToken(originalToken)
+                    }
                 }
             }
         }

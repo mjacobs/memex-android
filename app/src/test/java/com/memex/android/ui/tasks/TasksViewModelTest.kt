@@ -210,6 +210,21 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun testConfirmedToggleRefetchesTheTabToSettleOnServerTruth() = runTest {
+        viewModel.loadTasks()
+        advanceUntilIdle()
+        val callsAfterLoad = fakeRepository.getTasksCallCount
+
+        viewModel.toggleTaskCompletion(openTask1)
+        advanceUntilIdle()
+
+        // A tab fetch that raced the PATCH would have returned pre-toggle data, so the
+        // confirmed toggle reconciles by refetching.
+        assertTrue(fakeRepository.getTasksCallCount > callsAfterLoad)
+        assertEquals(listOf("01j6tsk_2"), viewModel.uiState.value.tasks.map { it.id })
+    }
+
+    @Test
     fun testLoadFailureSurfacesErrorMessage() = runTest {
         fakeRepository.shouldFailLoad = true
 
@@ -248,6 +263,7 @@ class TasksViewModelTest {
 
         var lastStatusQuery: String? = null
         var lastPatch: Pair<String, String?>? = null
+        var getTasksCallCount: Int = 0
 
         private val _notesFlow = MutableStateFlow<List<Note>>(emptyList())
         override val notes: StateFlow<List<Note>> = _notesFlow.asStateFlow()
@@ -282,6 +298,7 @@ class TasksViewModelTest {
             Result.failure(Exception("Not needed for TasksViewModel tests"))
 
         override suspend fun getTasks(status: String?): Result<List<Task>> {
+            getTasksCallCount++
             lastStatusQuery = status
             if (shouldFailLoad) return Result.failure(Exception(errorMessage))
             val filtered = tasksList.filter { status == null || it.status == status }

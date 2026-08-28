@@ -34,10 +34,11 @@ object ApiClient {
     fun createOkHttpClient(
         tokenStorage: SecureTokenStorage,
         customInterceptors: List<Interceptor> = emptyList(),
-        enableLogging: Boolean = false
+        enableLogging: Boolean = false,
+        allowedOrigin: () -> String? = { null }
     ): OkHttpClient {
         val builder = OkHttpClient.Builder()
-            .addInterceptor(AuthInterceptor(tokenStorage))
+            .addInterceptor(AuthInterceptor(tokenStorage, allowedOrigin))
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
@@ -77,7 +78,12 @@ object ApiClient {
     ): MemexApiService {
         return createApiService(
             baseUrl = baseUrl,
-            okHttpClient = createOkHttpClient(tokenStorage, enableLogging = enableLogging)
+            okHttpClient = createOkHttpClient(
+                tokenStorage = tokenStorage,
+                enableLogging = enableLogging,
+                // A single-purpose client: the key goes to this URL and nowhere else.
+                allowedOrigin = { baseUrl }
+            )
         )
     }
 

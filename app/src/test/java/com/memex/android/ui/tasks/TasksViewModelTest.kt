@@ -194,6 +194,22 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun testConfirmedToggleInsertsTaskIntoTheTabItNowMatches() = runTest {
+        viewModel.selectStatus("done")
+        advanceUntilIdle()
+        assertEquals(listOf("01j6tsk_3"), viewModel.uiState.value.tasks.map { it.id })
+
+        // A task absent from the active tab (e.g. the tab changed while the PATCH was
+        // in flight) is added rather than dropped when it starts matching.
+        viewModel.toggleTaskCompletion(openTask1)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.tasks.any { it.id == "01j6tsk_1" && it.status == "done" })
+        assertTrue(state.pendingToggleIds.isEmpty())
+    }
+
+    @Test
     fun testLoadFailureSurfacesErrorMessage() = runTest {
         fakeRepository.shouldFailLoad = true
 

@@ -173,6 +173,25 @@ fun RunDetailScreen(
                         )
                     }
                 }
+                uiState.errorMessage != null && run.trace.isEmpty() -> {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = uiState.errorMessage ?: "Could not load the run trace",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(onClick = { viewModel.selectRun(run.id) }) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                }
                 run.trace.isEmpty() -> {
                     Text(
                         text = "No trace recorded for this run.",

@@ -167,6 +167,37 @@ class ChatViewModelTest {
         assertEquals(1, fakeRepository.sendMessageCallCount)
     }
 
+    @Test
+    fun testServerEchoOfTheUserTurnIsNotRenderedTwice() = runTest {
+        fakeRepository.streamStates = listOf(
+            ChatStreamState.Trace(TraceEvent(t = "2026-08-28T13:00:01Z", role = "user", text = "what is open?")),
+            ChatStreamState.Trace(TraceEvent(t = "2026-08-28T13:00:02Z", role = "model", text = "2 open tasks")),
+            ChatStreamState.Done(existingSession)
+        )
+
+        viewModel.sendMessage("what is open?")
+        advanceUntilIdle()
+
+        val trace = viewModel.uiState.value.trace
+        assertEquals(1, trace.count { it.role == "user" })
+        assertEquals(listOf("user", "model"), trace.map { it.role })
+    }
+
+    @Test
+    fun testStartingANewSessionMidStreamReleasesTheComposer() = runTest {
+        fakeRepository.streamStates = listOf(
+            ChatStreamState.Trace(TraceEvent(t = "2026-08-28T13:00:01Z", role = "model", text = "thinking"))
+        )
+
+        viewModel.sendMessage("hello")
+        assertTrue(viewModel.uiState.value.isStreaming)
+
+        viewModel.startNewSession()
+
+        assertFalse(viewModel.uiState.value.isStreaming)
+        assertTrue(viewModel.uiState.value.trace.isEmpty())
+    }
+
     private class FakeChatRepository : ChatRepository {
         var sessionsResult: Result<List<ChatSession>> = Result.success(emptyList())
         var sessionDetail: ChatSession? = null

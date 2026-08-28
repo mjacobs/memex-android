@@ -13,12 +13,14 @@ import kotlinx.coroutines.withContext
 suspend fun testMemexConnection(serverUrl: String, token: String?): Result<String> =
     withContext(Dispatchers.IO) {
         runCatching {
-            val apiService = ApiClient.createApiService(
+            // Reachability is checked anonymously so an unverified server never sees
+            // the stored key.
+            val anonymous = ApiClient.createApiService(
                 baseUrl = serverUrl,
-                tokenStorage = InMemorySecureTokenStorage(initialToken = token)
+                tokenStorage = InMemorySecureTokenStorage(initialToken = null)
             )
 
-            val health = apiService.getHealth()
+            val health = anonymous.getHealth()
             if (!health.ok) {
                 error("Server reachable but reported not healthy")
             }
@@ -27,7 +29,11 @@ suspend fun testMemexConnection(serverUrl: String, token: String?): Result<Strin
                 return@runCatching "Server is healthy. Add a device key to load notes."
             }
 
-            val notes = apiService.getNotes(limit = 1).notes
+            val authorized = ApiClient.createApiService(
+                baseUrl = serverUrl,
+                tokenStorage = InMemorySecureTokenStorage(initialToken = token)
+            )
+            val notes = authorized.getNotes(limit = 1).notes
             if (notes.isEmpty()) {
                 "Connected and authorized. No notes captured yet."
             } else {

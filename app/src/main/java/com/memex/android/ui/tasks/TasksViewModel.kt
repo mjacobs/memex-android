@@ -120,10 +120,14 @@ class TasksViewModel(
                 _uiState.update { state ->
                     // The tabs are a status filter, so a confirmed toggle either updates
                     // the row in place or drops it out of the tab it no longer belongs to.
-                    val tasks = if (updatedTask.status == state.selectedStatus) {
-                        state.tasks.map { if (it.id == task.id) updatedTask else it }
-                    } else {
-                        state.tasks.filterNot { it.id == task.id }
+                    val tasks = when {
+                        updatedTask.status != state.selectedStatus ->
+                            state.tasks.filterNot { it.id == task.id }
+                        state.tasks.any { it.id == task.id } ->
+                            state.tasks.map { if (it.id == task.id) updatedTask else it }
+                        // A tab switch during the PATCH can leave the destination list
+                        // without the task; add it rather than losing it until a reload.
+                        else -> state.tasks + updatedTask
                     }
                     state.copy(
                         tasks = tasks,

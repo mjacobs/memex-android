@@ -70,7 +70,7 @@ class ChatViewModel(
     }
 
     fun selectSession(sessionId: String) {
-        streamJob?.cancel()
+        cancelStream()
         _uiState.update {
             it.copy(activeSessionId = sessionId, trace = emptyList(), errorMessage = null)
         }
@@ -94,7 +94,7 @@ class ChatViewModel(
     }
 
     fun startNewSession() {
-        streamJob?.cancel()
+        cancelStream()
         _uiState.update { it.copy(activeSessionId = null, trace = emptyList(), errorMessage = null) }
     }
 
@@ -116,6 +116,9 @@ class ChatViewModel(
 
         streamJob?.cancel()
         streamJob = viewModelScope.launch(dispatcher) {
+            // The turn is already on screen; the server replays it as a role:"user"
+            // trace event, which would otherwise render the message twice.
+            var pendingEcho: String? = trimmed
             val sessionId = _uiState.value.activeSessionId ?: run {
                 val created = chatRepository.createSession()
                 created.getOrElse { error ->
@@ -134,8 +137,13 @@ class ChatViewModel(
 
             chatRepository.sendMessage(sessionId, trimmed).collect { streamState ->
                 when (streamState) {
-                    is ChatStreamState.Trace -> _uiState.update {
-                        it.copy(trace = it.trace + streamState.event)
+                    is ChatStreamState.Trace -> {
+                        val event = streamState.event
+                        if (event.role == "user" && event.text?.trim() == pendingEcho) {
+                            pendingEcho = null
+                        } else {
+                            _uiState.update { it.copy(trace = it.trace + event) }
+                        }
                     }
                     is ChatStreamState.Done -> _uiState.update { state ->
                         val session = streamState.session
@@ -165,6 +173,11 @@ class ChatViewModel(
     }
 
     fun stopStreaming() {
+        cancelStream()
+    }
+
+    /** Ends any in-flight turn and releases the composer, which the cancel alone would not. */
+    private fun cancelStream() {
         streamJob?.cancel()
         streamJob = null
         _uiState.update { it.copy(isStreaming = false) }

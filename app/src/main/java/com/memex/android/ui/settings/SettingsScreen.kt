@@ -101,17 +101,6 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = uiState.deviceId,
-                onValueChange = viewModel::updateDeviceId,
-                label = { Text("Device ID") },
-                supportingText = { Text("Tags captures sent from this phone") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(

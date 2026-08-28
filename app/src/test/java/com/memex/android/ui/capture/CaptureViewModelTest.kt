@@ -195,10 +195,18 @@ class CaptureViewModelTest {
 
         viewModel.setMode(CaptureMode.IMAGE)
         val dummyBytes = byteArrayOf(10, 20, 30)
+
         viewModel.onImageSelected(dummyBytes)
+        // Immediately after calling onImageSelected, processing state is set and previous selection cleared
+        assertTrue(viewModel.viewState.value.isProcessingImage)
+        assertNull(viewModel.viewState.value.selectedImageBytes)
+        assertNull(viewModel.viewState.value.selectedImageBase64)
+        assertFalse(viewModel.viewState.value.canSubmit)
+
         advanceUntilIdle()
 
         val selectedState = viewModel.viewState.value
+        assertFalse(selectedState.isProcessingImage)
         assertNotNull(selectedState.selectedImageBytes)
         assertEquals("base64_encoded_dummy", selectedState.selectedImageBase64)
         assertTrue(selectedState.canSubmit)

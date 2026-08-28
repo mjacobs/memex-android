@@ -1,21 +1,29 @@
 package com.memex.android.util
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.util.Base64
 
 class ImageCompressorTest {
 
     private val compressor = DefaultImageCompressor()
 
     @Test
-    fun testEmptyByteArrayReturnsEmpty() {
+    fun testEmptyByteArrayThrowsIllegalArgumentException() {
         val empty = byteArrayOf()
-        val result = compressor.compress(empty)
-        assertEquals(0, result.size)
+        val exception = assertThrows(IllegalArgumentException::class.java) {
+            compressor.compress(empty)
+        }
+        assertEquals("Image data cannot be empty", exception.message)
+    }
+
+    @Test
+    fun testCompressToBase64EmptyBytesThrows() {
+        val empty = byteArrayOf()
+        assertThrows(IllegalArgumentException::class.java) {
+            compressor.compressToBase64(empty)
+        }
     }
 
     @Test
@@ -27,16 +35,10 @@ class ImageCompressorTest {
     }
 
     @Test
-    fun testCompressToBase64EmptyBytes() {
-        val empty = byteArrayOf()
-        val base64 = compressor.compressToBase64(empty)
-        assertEquals("", base64)
-    }
-
-    @Test
     fun testMaxImageBytesConstantUnderOneMegabyte() {
         assertTrue(ImageCompressor.MAX_IMAGE_BYTES <= 1_000_000L)
         assertTrue(ImageCompressor.TARGET_SAFE_BYTES < ImageCompressor.MAX_IMAGE_BYTES)
+        assertEquals(1600, ImageCompressor.MAX_DIMENSION)
         assertEquals("image/jpeg", ImageCompressor.DEFAULT_MIME_TYPE)
     }
 }

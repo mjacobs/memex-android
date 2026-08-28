@@ -12,7 +12,7 @@ interface ImageCompressor {
     /**
      * Compresses the provided image bytes to be strictly under [maxBytes] (defaults to 1,000,000 bytes)
      * using JPEG encoding.
-     * Throws [IllegalArgumentException] if [imageBytes] cannot be decoded into a valid bitmap.
+     * Throws [IllegalArgumentException] if [imageBytes] is empty or cannot be decoded into a valid bitmap.
      */
     fun compress(imageBytes: ByteArray, maxBytes: Long = MAX_IMAGE_BYTES): ByteArray
 
@@ -29,6 +29,7 @@ interface ImageCompressor {
     companion object {
         const val MAX_IMAGE_BYTES = 1_000_000L // Strictly < 1 MB
         const val TARGET_SAFE_BYTES = 950_000L
+        const val MAX_DIMENSION = 1600
         const val DEFAULT_MIME_TYPE = "image/jpeg"
     }
 }
@@ -40,11 +41,11 @@ class DefaultImageCompressor : ImageCompressor {
 
     override fun compress(imageBytes: ByteArray, maxBytes: Long): ByteArray {
         if (imageBytes.isEmpty()) {
-            return imageBytes
+            throw IllegalArgumentException("Image data cannot be empty")
         }
 
         try {
-            // Decode bounds to verify validity and calculate inSampleSize
+            // Decode bounds to verify validity and calculate inSampleSize targeting max dimension 1600
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
@@ -54,10 +55,9 @@ class DefaultImageCompressor : ImageCompressor {
                 throw IllegalArgumentException("Unable to decode image bytes: invalid or unsupported image format")
             }
 
-            val targetDimension = 1920
-            var sampleSize = 1
             val maxDim = maxOf(options.outWidth, options.outHeight)
-            while (maxDim / sampleSize > targetDimension * 2) {
+            var sampleSize = 1
+            while (maxDim / sampleSize > ImageCompressor.MAX_DIMENSION) {
                 sampleSize *= 2
             }
 

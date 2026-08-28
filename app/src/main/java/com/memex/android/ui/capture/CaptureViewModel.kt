@@ -55,6 +55,7 @@ data class CaptureViewState(
     val imageCaption: String = "",
     val selectedImageBytes: ByteArray? = null,
     val selectedImageBase64: String? = null,
+    val isProcessingImage: Boolean = false,
     val isRecording: Boolean = false,
     val recordingDurationSeconds: Long = 0L,
     val amplitude: Float = 0f,
@@ -67,10 +68,10 @@ data class CaptureViewState(
 
     val canSubmit: Boolean
         get() = when (mode) {
-            CaptureMode.TEXT -> textInput.isNotBlank()
-            CaptureMode.VOICE -> isRecording || (recordingDurationSeconds > 0)
-            CaptureMode.IMAGE -> selectedImageBytes != null || selectedImageBase64 != null
-            CaptureMode.LINK -> linkUrl.isNotBlank()
+            CaptureMode.TEXT -> textInput.isNotBlank() && !isSubmitting
+            CaptureMode.VOICE -> (isRecording || recordingDurationSeconds > 0) && !isSubmitting
+            CaptureMode.IMAGE -> !isProcessingImage && (selectedImageBytes != null || selectedImageBase64 != null) && !isSubmitting
+            CaptureMode.LINK -> linkUrl.isNotBlank() && !isSubmitting
         }
 }
 
@@ -148,14 +149,27 @@ class CaptureViewModel(
 
     fun onImageSelected(bytes: ByteArray) {
         compressionJob?.cancel()
+        _viewState.update {
+            it.copy(
+                isProcessingImage = true,
+                selectedImageBytes = null,
+                selectedImageBase64 = null,
+                errorMessage = null
+            )
+        }
+
         compressionJob = viewModelScope.launch {
             try {
+                val compressedBytes = withContext(defaultDispatcher) {
+                    imageCompressor.compress(bytes)
+                }
                 val base64 = withContext(defaultDispatcher) {
-                    imageCompressor.compressToBase64(bytes)
+                    imageCompressor.compressToBase64(compressedBytes)
                 }
                 _viewState.update {
                     it.copy(
-                        selectedImageBytes = bytes,
+                        isProcessingImage = false,
+                        selectedImageBytes = compressedBytes,
                         selectedImageBase64 = base64,
                         errorMessage = null
                     )
@@ -164,7 +178,10 @@ class CaptureViewModel(
                 throw e
             } catch (e: Exception) {
                 _viewState.update {
-                    it.copy(errorMessage = "Failed to process image: ${e.message}")
+                    it.copy(
+                        isProcessingImage = false,
+                        errorMessage = "Failed to process image: ${e.message}"
+                    )
                 }
             }
         }
@@ -172,19 +189,32 @@ class CaptureViewModel(
 
     fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
         compressionJob?.cancel()
+        _viewState.update {
+            it.copy(
+                isProcessingImage = true,
+                selectedImageBytes = null,
+                selectedImageBase64 = null,
+                errorMessage = null
+            )
+        }
+
         compressionJob = viewModelScope.launch {
             try {
-                val bytes = withContext(ioDispatcher) {
+                val rawBytes = withContext(ioDispatcher) {
                     contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 } ?: throw IOException("Could not read image data from URI")
 
+                val compressedBytes = withContext(defaultDispatcher) {
+                    imageCompressor.compress(rawBytes)
+                }
                 val base64 = withContext(defaultDispatcher) {
-                    imageCompressor.compressToBase64(bytes)
+                    imageCompressor.compressToBase64(compressedBytes)
                 }
 
                 _viewState.update {
                     it.copy(
-                        selectedImageBytes = bytes,
+                        isProcessingImage = false,
+                        selectedImageBytes = compressedBytes,
                         selectedImageBase64 = base64,
                         errorMessage = null
                     )
@@ -193,7 +223,10 @@ class CaptureViewModel(
                 throw e
             } catch (e: Exception) {
                 _viewState.update {
-                    it.copy(errorMessage = "Failed to process image: ${e.message}")
+                    it.copy(
+                        isProcessingImage = false,
+                        errorMessage = "Failed to process image: ${e.message}"
+                    )
                 }
             }
         }

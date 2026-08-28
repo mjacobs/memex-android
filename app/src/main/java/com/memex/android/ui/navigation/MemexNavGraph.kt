@@ -90,6 +90,11 @@ fun MemexNavGraph(
     val currentRoute = backStackEntry?.destination?.route
 
     fun navigateToTab(route: String) {
+        if (currentRoute == route) return
+        // Popping first covers the destination already sitting below on the stack —
+        // notably Feed, the start destination, which a navigate() with popUpTo to
+        // itself leaves untouched, stranding the user on Settings.
+        if (navController.popBackStack(route, inclusive = false)) return
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true

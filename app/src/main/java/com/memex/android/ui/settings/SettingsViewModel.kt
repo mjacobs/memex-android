@@ -59,8 +59,12 @@ class SettingsViewModel(
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    /** The URL bound when the process started; a change from it needs a restart. */
-    private val bootServerUrl: String = appPreferences.serverUrl
+    /**
+     * The URL bound when the process started, in normalized form so that merely
+     * canonicalising what was already configured does not read as a change.
+     */
+    private val bootServerUrl: String =
+        normalizeServerUrl(appPreferences.serverUrl) ?: appPreferences.serverUrl
 
     fun updateServerUrl(value: String) {
         _uiState.update { it.copy(serverUrl = value, connectionResult = null) }

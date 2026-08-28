@@ -85,6 +85,19 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun testCanonicalisingTheSameUrlDoesNotAskForARestart() = runTest {
+        appPreferences = InMemoryAppPreferences(initialServerUrl = "https://memex.example.com")
+        val viewModel = viewModel()
+
+        // Saving the configured URL only adds the trailing slash; nothing actually moved.
+        viewModel.saveAndTestConnection()
+        advanceUntilIdle()
+
+        assertEquals("https://memex.example.com/", appPreferences.serverUrl)
+        assertFalse(viewModel.uiState.value.restartRequired)
+    }
+
+    @Test
     fun testChangingServerOriginDiscardsTheStoredKey() = runTest {
         val viewModel = viewModel()
 

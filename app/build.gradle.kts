@@ -40,6 +40,12 @@ android {
         compose = true
     }
 
+    testOptions {
+        // SSE frame parsing logs skipped frames through android.util.Log, which is a
+        // stub in local unit tests; return defaults instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             excludes += listOf(

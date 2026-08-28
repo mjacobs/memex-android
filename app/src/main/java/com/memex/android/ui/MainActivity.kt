@@ -2,34 +2,35 @@ package com.memex.android.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.memex.android.data.api.ApiClient
+import com.memex.android.data.api.SseChatClient
+import com.memex.android.data.local.AppPreferences
 import com.memex.android.data.local.SharedPreferencesAppPreferences
 import com.memex.android.data.repository.CaptureRepository
 import com.memex.android.data.repository.CaptureRepositoryImpl
+import com.memex.android.data.repository.ChatRepository
+import com.memex.android.data.repository.ChatRepositoryImpl
 import com.memex.android.data.repository.MemexRepository
 import com.memex.android.data.repository.MemexRepositoryImpl
 import com.memex.android.data.security.EncryptedSecureTokenStorage
+import com.memex.android.data.security.SecureTokenStorage
+import com.memex.android.ui.approvals.ApprovalsViewModel
 import com.memex.android.ui.capture.CaptureViewModel
-import com.memex.android.ui.capture.QuickCaptureBottomSheet
-import com.memex.android.ui.feed.FeedScreen
+import com.memex.android.ui.chat.ChatViewModel
 import com.memex.android.ui.feed.FeedViewModel
-import com.memex.android.ui.feed.NoteDetailScreen
+import com.memex.android.ui.navigation.MemexNavGraph
+import com.memex.android.ui.runs.RunsViewModel
+import com.memex.android.ui.settings.SettingsViewModel
+import com.memex.android.ui.settings.testMemexConnection
+import com.memex.android.ui.tasks.TasksViewModel
 import com.memex.android.ui.theme.MemexTheme
 import com.memex.android.util.AudioRecorder
 import com.memex.android.util.DefaultAudioRecorder
@@ -66,18 +67,93 @@ class CaptureViewModelFactory(
     }
 }
 
+class TasksViewModelFactory(
+    private val repository: MemexRepository
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(TasksViewModel::class.java)) {
+            return TasksViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+    }
+}
+
+class ApprovalsViewModelFactory(
+    private val repository: MemexRepository
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ApprovalsViewModel::class.java)) {
+            return ApprovalsViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+    }
+}
+
+class RunsViewModelFactory(
+    private val repository: MemexRepository
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(RunsViewModel::class.java)) {
+            return RunsViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+    }
+}
+
+class ChatViewModelFactory(
+    private val chatRepository: ChatRepository
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
+            return ChatViewModel(chatRepository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+    }
+}
+
+class SettingsViewModelFactory(
+    private val tokenStorage: SecureTokenStorage,
+    private val appPreferences: AppPreferences
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(SettingsViewModel::class.java)) {
+            return SettingsViewModel(
+                tokenStorage = tokenStorage,
+                appPreferences = appPreferences,
+                connectionTester = ::testMemexConnection
+            ) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     private val tokenStorage by lazy { EncryptedSecureTokenStorage(applicationContext) }
     private val appPreferences by lazy { SharedPreferencesAppPreferences(applicationContext) }
+    private val okHttpClient by lazy { ApiClient.createOkHttpClient(tokenStorage) }
     private val apiService by lazy {
         ApiClient.createApiService(
             baseUrl = appPreferences.serverUrl,
-            tokenStorage = tokenStorage
+            okHttpClient = okHttpClient
         )
     }
     private val memexRepository by lazy { MemexRepositoryImpl(apiService) }
     private val captureRepository by lazy { CaptureRepositoryImpl(apiService) }
+    private val chatRepository by lazy {
+        ChatRepositoryImpl(
+            apiService = apiService,
+            sseChatClient = SseChatClient(
+                baseUrl = appPreferences.serverUrl,
+                okHttpClient = okHttpClient
+            )
+        )
+    }
     private val audioRecorder by lazy { DefaultAudioRecorder(applicationContext) }
     private val imageCompressor by lazy { DefaultImageCompressor() }
 
@@ -87,6 +163,21 @@ class MainActivity : ComponentActivity() {
     private val captureViewModel: CaptureViewModel by viewModels {
         CaptureViewModelFactory(captureRepository, audioRecorder, imageCompressor)
     }
+    private val tasksViewModel: TasksViewModel by viewModels {
+        TasksViewModelFactory(memexRepository)
+    }
+    private val approvalsViewModel: ApprovalsViewModel by viewModels {
+        ApprovalsViewModelFactory(memexRepository)
+    }
+    private val runsViewModel: RunsViewModel by viewModels {
+        RunsViewModelFactory(memexRepository)
+    }
+    private val chatViewModel: ChatViewModel by viewModels {
+        ChatViewModelFactory(chatRepository)
+    }
+    private val settingsViewModel: SettingsViewModel by viewModels {
+        SettingsViewModelFactory(tokenStorage, appPreferences)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,56 +185,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             MemexTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    MemexAppContent(
+                    MemexNavGraph(
                         feedViewModel = feedViewModel,
-                        captureViewModel = captureViewModel
+                        captureViewModel = captureViewModel,
+                        tasksViewModel = tasksViewModel,
+                        approvalsViewModel = approvalsViewModel,
+                        runsViewModel = runsViewModel,
+                        chatViewModel = chatViewModel,
+                        settingsViewModel = settingsViewModel
                     )
                 }
             }
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MemexAppContent(
-    feedViewModel: FeedViewModel,
-    captureViewModel: CaptureViewModel,
-    modifier: Modifier = Modifier
-) {
-    val feedUiState by feedViewModel.uiState.collectAsState()
-    var showCaptureSheet by rememberSaveable { mutableStateOf(false) }
-
-    // Intercept system Back when viewing note detail
-    BackHandler(enabled = feedUiState.selectedNote != null) {
-        feedViewModel.clearSelectedNote()
-    }
-
-    val selectedNote = feedUiState.selectedNote
-    if (selectedNote != null) {
-        NoteDetailScreen(
-            noteId = selectedNote.id,
-            viewModel = feedViewModel,
-            onBackClick = { feedViewModel.clearSelectedNote() },
-            modifier = modifier
-        )
-    } else {
-        FeedScreen(
-            viewModel = feedViewModel,
-            onNoteClick = { noteId -> feedViewModel.selectNote(noteId) },
-            onQuickCaptureClick = { showCaptureSheet = true },
-            modifier = modifier
-        )
-    }
-
-    if (showCaptureSheet) {
-        QuickCaptureBottomSheet(
-            viewModel = captureViewModel,
-            onDismissRequest = { showCaptureSheet = false },
-            onSuccess = {
-                showCaptureSheet = false
-                feedViewModel.refresh()
-            }
-        )
     }
 }

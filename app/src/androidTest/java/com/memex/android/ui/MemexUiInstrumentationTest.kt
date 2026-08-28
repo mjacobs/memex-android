@@ -216,6 +216,37 @@ class MemexUiInstrumentationTest {
     }
 
     @Test
+    fun bottomBarReturnsToFeedFromSettings() {
+        awaitText(NOTE_ONE_SUMMARY)
+
+        composeTestRule.onNodeWithContentDescription("Settings").performClick()
+        awaitText("Save & Test Connection")
+
+        // Feed is the start destination; navigating back to it used to leave the user
+        // stranded on Settings.
+        composeTestRule.onNodeWithContentDescription("Feed", useUnmergedTree = true).performClick()
+        awaitText(NOTE_ONE_SUMMARY)
+    }
+
+    @Test
+    fun chatDraftSurvivesATabSwitch() {
+        awaitText(NOTE_ONE_SUMMARY)
+
+        composeTestRule.onNodeWithContentDescription("Chat", useUnmergedTree = true).performClick()
+        awaitText("Ask Memex anything")
+
+        composeTestRule.onAllNodes(hasSetTextAction()).onFirst().performTextInput(CHAT_DRAFT)
+        awaitText(CHAT_DRAFT)
+
+        composeTestRule.onNodeWithContentDescription("Feed", useUnmergedTree = true).performClick()
+        awaitText(NOTE_ONE_SUMMARY)
+
+        composeTestRule.onNodeWithContentDescription("Chat", useUnmergedTree = true).performClick()
+        // Popping back to a tab must preserve the state of the tab being left.
+        awaitText(CHAT_DRAFT)
+    }
+
+    @Test
     fun approvalsApproveAndRejectDismissCards() {
         awaitText(NOTE_ONE_SUMMARY)
 
@@ -236,6 +267,7 @@ class MemexUiInstrumentationTest {
         private const val TIMEOUT_MS = 10_000L
         private const val INSTRUMENTATION_TOKEN = "instrumentation-only-token"
         private const val EDIT_PREFIX = "Edited: "
+        private const val CHAT_DRAFT = "draft survives the tab switch"
 
         private const val NOTE_ONE_SUMMARY = "Ship the Android client"
         private const val NOTE_TWO_SUMMARY = "Kotlin coroutines reading list"
@@ -329,7 +361,9 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
 
             basePath.startsWith("/api/v1/routines/runs") -> json("""{"runs":[$routineRun]}""")
 
-            // Chat is absent from this fixture, exercising the graceful fallback path.
+            method == "GET" && basePath == "/api/v1/chat/sessions" -> json("""{"sessions":[]}""")
+
+            // Any other chat route is absent, exercising the graceful fallback path.
             basePath.startsWith("/api/v1/chat/") ->
                 json("""{"error":{"code":"not_found","message":"chat not deployed"}}""", 404)
 

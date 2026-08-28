@@ -94,7 +94,9 @@ fun MemexNavGraph(
         // Popping first covers the destination already sitting below on the stack —
         // notably Feed, the start destination, which a navigate() with popUpTo to
         // itself leaves untouched, stranding the user on Settings.
-        if (navController.popBackStack(route, inclusive = false)) return
+        // saveState mirrors the navigate() path below, so popping back to a tab still
+        // preserves the state of the tab being left — a half-typed chat draft, say.
+        if (navController.popBackStack(route, inclusive = false, saveState = true)) return
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true

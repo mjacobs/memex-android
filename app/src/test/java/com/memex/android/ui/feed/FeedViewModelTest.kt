@@ -6,6 +6,7 @@ import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.model.Task
 import com.memex.android.data.model.TraceEvent
 import com.memex.android.data.repository.MemexRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
@@ -258,6 +260,30 @@ class FeedViewModelTest {
     }
 
     @Test
+    fun testPatchNoteReappliesActiveFilter() = runTest {
+        viewModel.loadNotes()
+        advanceUntilIdle()
+
+        // Filter by compose tag
+        viewModel.selectTag("compose")
+        advanceUntilIdle()
+        assertEquals(1, viewModel.uiState.value.notes.size)
+        assertEquals("01j6not_1", viewModel.uiState.value.notes[0].id)
+
+        // Patch note to remove "compose" tag
+        viewModel.patchNote(
+            id = "01j6not_1",
+            summary = "Summary without compose",
+            tags = listOf("android", "kotlin")
+        )
+        advanceUntilIdle()
+
+        // Note should now be filtered out from the active "compose" feed list
+        val state = viewModel.uiState.value
+        assertEquals(0, state.notes.size)
+    }
+
+    @Test
     fun testPatchNoteFailure() = runTest {
         viewModel.loadNotes()
         advanceUntilIdle()
@@ -336,6 +362,96 @@ class FeedViewModelTest {
     }
 
     @Test
+    fun testRaceConditionGuardsOnSelectNote() = runTest {
+        val slowNote1Deferred = CompletableDeferred<Note>()
+        val slowRepo = object : FakeMemexRepository() {
+            override suspend fun getNote(id: String): Result<Note> {
+                return if (id == "01j6not_1") {
+                    Result.success(slowNote1Deferred.await())
+                } else {
+                    val note = notesList.find { it.id == id } ?: throw Exception("Not found")
+                    Result.success(note)
+                }
+            }
+        }
+        slowRepo.notesList = listOf(sampleNote1, sampleNote2)
+
+        val raceViewModel = FeedViewModel(
+            repository = slowRepo,
+            dispatcher = testDispatcher
+        )
+
+        // User taps note 1
+        raceViewModel.selectNote("01j6not_1")
+        runCurrent()
+        assertEquals("01j6not_1", raceViewModel.uiState.value.selectedNote?.id)
+        assertTrue(raceViewModel.uiState.value.isDetailLoading)
+
+        // While note 1 is still fetching, user taps note 2
+        raceViewModel.selectNote("01j6not_2")
+        runCurrent()
+        assertEquals("01j6not_2", raceViewModel.uiState.value.selectedNote?.id)
+
+        // Note 1 completes late
+        slowNote1Deferred.complete(sampleNote1.copy(summary = "Slow Note 1 Complete"))
+        advanceUntilIdle()
+
+        // State must still reflect note 2
+        assertEquals("01j6not_2", raceViewModel.uiState.value.selectedNote?.id)
+        assertFalse(raceViewModel.uiState.value.isDetailLoading)
+    }
+
+    @Test
+    fun testJobCancellationOnFilterChange() = runTest {
+        val slowQueryDeferred = CompletableDeferred<List<Note>>()
+        val slowRepo = object : FakeMemexRepository() {
+            override suspend fun getNotes(
+                limit: Int?,
+                before: String?,
+                tag: String?,
+                kind: String?
+            ): Result<List<Note>> {
+                lastKindQuery = kind
+                if (kind == "capture") {
+                    return Result.success(slowQueryDeferred.await())
+                }
+                return Result.success(notesList.filter { note ->
+                    (kind == null || note.kind.equals(kind, ignoreCase = true)) &&
+                    (tag == null || note.tags.contains(tag))
+                })
+            }
+        }
+        slowRepo.notesList = listOf(sampleNote1, sampleNote2)
+
+        val cancelViewModel = FeedViewModel(
+            repository = slowRepo,
+            dispatcher = testDispatcher
+        )
+
+        // Select kind "capture" (slow query)
+        cancelViewModel.selectKind("capture")
+        runCurrent()
+        assertTrue(cancelViewModel.uiState.value.isLoading)
+
+        // Immediately switch to kind "link"
+        cancelViewModel.selectKind("link")
+        advanceUntilIdle()
+
+        assertEquals("link", cancelViewModel.uiState.value.selectedKind)
+        assertEquals(1, cancelViewModel.uiState.value.notes.size)
+        assertEquals("01j6not_2", cancelViewModel.uiState.value.notes[0].id)
+
+        // Complete slow capture query
+        slowQueryDeferred.complete(listOf(sampleNote1))
+        advanceUntilIdle()
+
+        // Link notes should not have been overwritten by stale capture result
+        assertEquals("link", cancelViewModel.uiState.value.selectedKind)
+        assertEquals(1, cancelViewModel.uiState.value.notes.size)
+        assertEquals("01j6not_2", cancelViewModel.uiState.value.notes[0].id)
+    }
+
+    @Test
     fun testErrorHandlingAndDismissError() = runTest {
         fakeRepository.shouldFail = true
         fakeRepository.errorMessage = "Failed to fetch notes"
@@ -351,7 +467,7 @@ class FeedViewModelTest {
         assertNull(viewModel.uiState.value.errorMessage)
     }
 
-    private class FakeMemexRepository : MemexRepository {
+    private open class FakeMemexRepository : MemexRepository {
         var notesList: List<Note> = emptyList()
         var tasksList: List<Task> = emptyList()
         var nextPageNotes: List<Note> = emptyList()

@@ -8,6 +8,7 @@ import com.memex.android.data.repository.MemexRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,12 +40,20 @@ class FeedViewModel(
     private val _uiState = MutableStateFlow(FeedUiState())
     val uiState: StateFlow<FeedUiState> = _uiState.asStateFlow()
 
+    private var repoObservationJob: Job? = null
+    private var fetchJob: Job? = null
+    private var paginationJob: Job? = null
+    private var detailJob: Job? = null
+    private var patchJob: Job? = null
+    private var deleteJob: Job? = null
+
     init {
         observeRepositoryNotes()
     }
 
     private fun observeRepositoryNotes() {
-        viewModelScope.launch(dispatcher) {
+        repoObservationJob?.cancel()
+        repoObservationJob = viewModelScope.launch(dispatcher) {
             repository.notes.collect { cachedNotes ->
                 if (cachedNotes.isNotEmpty() && _uiState.value.notes.isEmpty()) {
                     val filtered = filterNotes(cachedNotes, _uiState.value.selectedKind, _uiState.value.selectedTag)
@@ -72,17 +81,23 @@ class FeedViewModel(
     }
 
     fun loadNotes(refresh: Boolean = false) {
-        viewModelScope.launch(dispatcher) {
+        fetchJob?.cancel()
+        paginationJob?.cancel()
+
+        fetchJob = viewModelScope.launch(dispatcher) {
             _uiState.update {
                 if (refresh) it.copy(isRefreshing = true, errorMessage = null)
                 else it.copy(isLoading = it.notes.isEmpty(), errorMessage = null)
             }
 
+            val currentTag = _uiState.value.selectedTag
+            val currentKind = _uiState.value.selectedKind
+
             val result = withContext(dispatcher) {
                 repository.getNotes(
                     limit = 20,
-                    tag = _uiState.value.selectedTag,
-                    kind = _uiState.value.selectedKind
+                    tag = currentTag,
+                    kind = currentKind
                 )
             }
 
@@ -115,12 +130,16 @@ class FeedViewModel(
     }
 
     fun selectKind(kind: String?) {
+        fetchJob?.cancel()
+        paginationJob?.cancel()
         val normalizedKind = if (kind.equals("all", ignoreCase = true)) null else kind
         _uiState.update { it.copy(selectedKind = normalizedKind) }
         loadNotes()
     }
 
     fun selectTag(tag: String?) {
+        fetchJob?.cancel()
+        paginationJob?.cancel()
         _uiState.update { it.copy(selectedTag = tag) }
         loadNotes()
     }
@@ -130,16 +149,19 @@ class FeedViewModel(
         if (state.isLoadingMore || state.isLoading || state.isRefreshing || state.notes.isEmpty()) return
 
         val oldestCreatedAt = state.notes.lastOrNull()?.createdAt ?: return
+        val currentTag = state.selectedTag
+        val currentKind = state.selectedKind
 
-        viewModelScope.launch(dispatcher) {
+        paginationJob?.cancel()
+        paginationJob = viewModelScope.launch(dispatcher) {
             _uiState.update { it.copy(isLoadingMore = true, errorMessage = null) }
 
             val result = withContext(dispatcher) {
                 repository.getNotes(
                     limit = 20,
                     before = oldestCreatedAt,
-                    tag = _uiState.value.selectedTag,
-                    kind = _uiState.value.selectedKind
+                    tag = currentTag,
+                    kind = currentKind
                 )
             }
 
@@ -167,46 +189,64 @@ class FeedViewModel(
     }
 
     fun selectNote(noteId: String) {
+        detailJob?.cancel()
+
         val cachedNote = _uiState.value.notes.find { it.id == noteId }
         _uiState.update {
             it.copy(
-                selectedNote = cachedNote,
+                selectedNote = cachedNote ?: Note(id = noteId, createdAt = "", kind = "capture"),
+                tasksForSelectedNote = emptyList(),
                 isDetailLoading = true,
                 errorMessage = null
             )
         }
 
-        viewModelScope.launch(dispatcher) {
+        detailJob = viewModelScope.launch(dispatcher) {
             val noteResult = withContext(dispatcher) { repository.getNote(noteId) }
             val tasksResult = withContext(dispatcher) { repository.getTasks() }
 
             noteResult.onSuccess { fetchedNote ->
-                val allTasks = tasksResult.getOrNull() ?: emptyList()
-                val relatedTasks = allTasks.filter { task ->
-                    task.id in fetchedNote.taskIds || task.sourceNoteId == fetchedNote.id
-                }
+                // Apply fetched detail and tasks only if this is still the active selected note
+                if (_uiState.value.selectedNote?.id == noteId) {
+                    val allTasks = tasksResult.getOrNull() ?: emptyList()
+                    val relatedTasks = allTasks.filter { task ->
+                        task.id in fetchedNote.taskIds || task.sourceNoteId == fetchedNote.id
+                    }
 
-                _uiState.update { current ->
-                    current.copy(
-                        selectedNote = fetchedNote,
-                        tasksForSelectedNote = relatedTasks,
-                        isDetailLoading = false,
-                        errorMessage = null
-                    )
+                    _uiState.update { current ->
+                        if (current.selectedNote?.id == noteId) {
+                            current.copy(
+                                selectedNote = fetchedNote,
+                                tasksForSelectedNote = relatedTasks,
+                                isDetailLoading = false,
+                                errorMessage = null
+                            )
+                        } else {
+                            current
+                        }
+                    }
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                _uiState.update {
-                    it.copy(
-                        isDetailLoading = false,
-                        errorMessage = error.message ?: "Failed to load note details"
-                    )
+                if (_uiState.value.selectedNote?.id == noteId) {
+                    _uiState.update {
+                        if (it.selectedNote?.id == noteId) {
+                            it.copy(
+                                isDetailLoading = false,
+                                errorMessage = error.message ?: "Failed to load note details"
+                            )
+                        } else {
+                            it
+                        }
+                    }
                 }
             }
         }
     }
 
     fun clearSelectedNote() {
+        detailJob?.cancel()
+        detailJob = null
         _uiState.update {
             it.copy(
                 selectedNote = null,
@@ -223,7 +263,8 @@ class FeedViewModel(
         tags: List<String>? = null,
         onSuccess: () -> Unit = {}
     ) {
-        viewModelScope.launch(dispatcher) {
+        patchJob?.cancel()
+        patchJob = viewModelScope.launch(dispatcher) {
             _uiState.update { it.copy(isPatching = true, errorMessage = null) }
 
             val result = withContext(dispatcher) {
@@ -237,10 +278,12 @@ class FeedViewModel(
 
             result.onSuccess { updatedNote ->
                 _uiState.update { current ->
+                    // Update note and reapply current active filters
                     val updatedNotes = current.notes.map { if (it.id == id) updatedNote else it }
+                    val filteredNotes = filterNotes(updatedNotes, current.selectedKind, current.selectedTag)
                     val updatedTags = (current.allTags + (tags ?: emptyList())).filter { it.isNotBlank() }.distinct().sorted()
                     current.copy(
-                        notes = updatedNotes,
+                        notes = filteredNotes,
                         selectedNote = if (current.selectedNote?.id == id) updatedNote else current.selectedNote,
                         allTags = updatedTags,
                         isPatching = false,
@@ -264,7 +307,8 @@ class FeedViewModel(
         id: String,
         onSuccess: () -> Unit = {}
     ) {
-        viewModelScope.launch(dispatcher) {
+        deleteJob?.cancel()
+        deleteJob = viewModelScope.launch(dispatcher) {
             _uiState.update { it.copy(isDeleting = true, errorMessage = null) }
 
             val result = withContext(dispatcher) {
@@ -297,5 +341,15 @@ class FeedViewModel(
 
     fun dismissError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        repoObservationJob?.cancel()
+        fetchJob?.cancel()
+        paginationJob?.cancel()
+        detailJob?.cancel()
+        patchJob?.cancel()
+        deleteJob?.cancel()
     }
 }

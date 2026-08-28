@@ -9,6 +9,7 @@ import com.memex.android.data.model.Approval
 import com.memex.android.data.model.Note
 import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.model.Task
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -87,6 +88,8 @@ class MemexRepositoryImpl(
     private suspend fun <T> safeApiCall(block: suspend () -> T): Result<T> {
         return try {
             Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: HttpException) {
             Result.failure(ApiClient.parseHttpError(e))
         } catch (e: Exception) {
@@ -107,7 +110,11 @@ class MemexRepositoryImpl(
                 tag = tag,
                 kind = kind
             )
-            _notes.value = response.notes
+            if (before != null) {
+                _notes.value = (_notes.value + response.notes).distinctBy { it.id }
+            } else {
+                _notes.value = response.notes
+            }
             response.notes
         }
     }

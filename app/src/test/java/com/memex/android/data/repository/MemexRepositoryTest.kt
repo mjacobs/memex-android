@@ -597,6 +597,98 @@ class MemexRepositoryTest {
     }
 
     @Test
+    fun testNotesPaginationAppendsAndDeduplicatesCache() = runTest {
+        val page1Json = """
+            {
+                "notes": [
+                    {
+                        "id": "01j6not1",
+                        "created_at": "2026-08-28T10:00:00Z",
+                        "kind": "capture",
+                        "summary": "Page 1 Note 1",
+                        "body": "Body 1"
+                    },
+                    {
+                        "id": "01j6not2",
+                        "created_at": "2026-08-28T09:00:00Z",
+                        "kind": "capture",
+                        "summary": "Page 1 Note 2",
+                        "body": "Body 2"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val page2Json = """
+            {
+                "notes": [
+                    {
+                        "id": "01j6not2",
+                        "created_at": "2026-08-28T09:00:00Z",
+                        "kind": "capture",
+                        "summary": "Page 2 Note 2 (overlap)",
+                        "body": "Body 2"
+                    },
+                    {
+                        "id": "01j6not3",
+                        "created_at": "2026-08-28T08:00:00Z",
+                        "kind": "capture",
+                        "summary": "Page 2 Note 3",
+                        "body": "Body 3"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(page1Json)
+        )
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(page2Json)
+        )
+
+        // Load page 1 (before == null -> replaces cache)
+        val res1 = repository.getNotes(limit = 2)
+        assertTrue(res1.isSuccess)
+        assertEquals(2, repository.notes.value.size)
+        assertEquals("01j6not1", repository.notes.value[0].id)
+        assertEquals("01j6not2", repository.notes.value[1].id)
+
+        // Load page 2 (before != null -> appends and deduplicates cache)
+        val res2 = repository.getNotes(limit = 2, before = "01j6not2")
+        assertTrue(res2.isSuccess)
+        assertEquals(3, repository.notes.value.size)
+        assertEquals("01j6not1", repository.notes.value[0].id)
+        assertEquals("01j6not2", repository.notes.value[1].id)
+        assertEquals("01j6not3", repository.notes.value[2].id)
+
+        val req1 = mockWebServer.takeRequest(5, TimeUnit.SECONDS)
+        assertEquals("/api/v1/notes?limit=2", req1?.path)
+        val req2 = mockWebServer.takeRequest(5, TimeUnit.SECONDS)
+        assertEquals("/api/v1/notes?limit=2&before=01j6not2", req2?.path)
+    }
+
+    @Test
+    fun testCancellationExceptionIsRethrown() = runTest {
+        val mockService = object : MemexApiService by apiService {
+            override suspend fun getHealth(): com.memex.android.data.api.HealthResponse {
+                throw kotlinx.coroutines.CancellationException("Test cancellation")
+            }
+        }
+        val testRepo = MemexRepositoryImpl(mockService)
+
+        org.junit.jupiter.api.assertThrows<kotlinx.coroutines.CancellationException> {
+            testRepo.checkHealth()
+        }
+    }
+
+    @Test
     fun testSecureTokenStorage() {
         val storage = InMemorySecureTokenStorage()
         assertNull(storage.getToken())
@@ -608,3 +700,4 @@ class MemexRepositoryTest {
         assertNull(storage.getToken())
     }
 }
+

@@ -44,7 +44,8 @@ object ApiClient {
 
         if (enableLogging) {
             val loggingInterceptor = HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
+                level = HttpLoggingInterceptor.Level.HEADERS
+                redactHeader("Authorization")
             }
             builder.addInterceptor(loggingInterceptor)
         }

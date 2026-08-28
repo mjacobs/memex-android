@@ -19,7 +19,10 @@ class AuthInterceptorTest {
     fun setUp() {
         mockWebServer = MockWebServer()
         mockWebServer.start()
-        tokenStorage = InMemorySecureTokenStorage(initialToken = "device-key")
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "device-key",
+            initialOrigin = mockWebServer.url("/").toString()
+        )
     }
 
     @AfterEach
@@ -72,16 +75,18 @@ class AuthInterceptorTest {
     }
 
     @Test
-    fun testTokenIsAttachedWhenNoOriginRestrictionIsConfigured() = runTest {
+    fun testKeyWithNoRecordedOriginIsWithheld() = runTest {
         enqueueHealth()
+        val unboundStorage = InMemorySecureTokenStorage(initialToken = "device-key")
         val service = ApiClient.createApiService(
             baseUrl = mockWebServer.url("/").toString(),
-            okHttpClient = ApiClient.createOkHttpClient(tokenStorage = tokenStorage)
+            okHttpClient = ApiClient.createOkHttpClient(tokenStorage = unboundStorage)
         )
 
         service.getHealth()
 
-        assertEquals("Bearer device-key", mockWebServer.takeRequest().getHeader("Authorization"))
+        // Fail closed: a key that cannot be shown to belong here is not sent.
+        assertNull(mockWebServer.takeRequest().getHeader("Authorization"))
     }
 
     @Test

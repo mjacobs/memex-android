@@ -17,7 +17,7 @@ suspend fun testMemexConnection(serverUrl: String, token: String?): Result<Strin
             // the stored key.
             val anonymous = ApiClient.createApiService(
                 baseUrl = serverUrl,
-                tokenStorage = InMemorySecureTokenStorage(initialToken = null)
+                tokenStorage = InMemorySecureTokenStorage(initialToken = null, initialOrigin = null)
             )
 
             val health = anonymous.getHealth()
@@ -31,7 +31,7 @@ suspend fun testMemexConnection(serverUrl: String, token: String?): Result<Strin
 
             val authorized = ApiClient.createApiService(
                 baseUrl = serverUrl,
-                tokenStorage = InMemorySecureTokenStorage(initialToken = token)
+                tokenStorage = InMemorySecureTokenStorage(initialToken = token, initialOrigin = serverUrl)
             )
             val notes = authorized.getNotes(limit = 1).notes
             if (notes.isEmpty()) {

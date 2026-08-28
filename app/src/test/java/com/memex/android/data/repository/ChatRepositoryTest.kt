@@ -43,7 +43,10 @@ class ChatRepositoryTest {
         mockWebServer = MockWebServer()
         mockWebServer.start()
 
-        tokenStorage = InMemorySecureTokenStorage(initialToken = "test-chat-bearer-token")
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "test-chat-bearer-token",
+            initialOrigin = mockWebServer.url("/").toString()
+        )
         okHttpClient = ApiClient.createOkHttpClient(tokenStorage)
 
         val baseUrl = mockWebServer.url("/").toString()

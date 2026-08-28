@@ -18,7 +18,7 @@ interface SecureTokenStorage {
      */
     fun getTokenOrigin(): String?
 
-    fun setToken(token: String?, origin: String? = null)
+    fun setToken(token: String?, origin: String?)
 
     fun clearToken()
 }

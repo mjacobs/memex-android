@@ -40,7 +40,10 @@ class MemexRepositoryTest {
         mockWebServer = MockWebServer()
         mockWebServer.start()
 
-        tokenStorage = InMemorySecureTokenStorage(initialToken = "test-bearer-token-12345")
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "test-bearer-token-12345",
+            initialOrigin = mockWebServer.url("/").toString()
+        )
         appPreferences = InMemoryAppPreferences()
 
         val baseUrl = mockWebServer.url("/").toString()
@@ -1026,11 +1029,13 @@ class MemexRepositoryTest {
         val storage = InMemorySecureTokenStorage()
         assertNull(storage.getToken())
 
-        storage.setToken("my-secret-key")
+        storage.setToken("my-secret-key", "https://memex.example.com/")
         assertEquals("my-secret-key", storage.getToken())
+        assertEquals("https://memex.example.com/", storage.getTokenOrigin())
 
         storage.clearToken()
         assertNull(storage.getToken())
+        assertNull(storage.getTokenOrigin())
     }
 }
 

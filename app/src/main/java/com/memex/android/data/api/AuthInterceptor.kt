@@ -9,11 +9,11 @@ import okhttp3.Response
  * Injects `Authorization: Bearer <token>` into outgoing requests when a bearer token is
  * present in [SecureTokenStorage].
  *
- * [allowedOrigin] is the one server the key may be sent to. A client built before the
- * user pointed the app at a different server is still bound to the old base URL, so
- * without this check its next request would carry the new server's key to the old host.
- * Returning null disables the check, which is only appropriate for a client built for
- * one specific URL (the Settings connection probe).
+ * Two independent checks must both pass. The key must record the origin it was entered
+ * for and that origin must match the request — an unbound key is withheld rather than
+ * guessed at. [allowedOrigin], when non-null, additionally pins the client to one
+ * server, so a client built before the user pointed the app elsewhere cannot carry the
+ * newly entered key to the host it is still bound to.
  */
 class AuthInterceptor(
     private val tokenStorage: SecureTokenStorage,
@@ -27,13 +27,13 @@ class AuthInterceptor(
         val requestBuilder = originalRequest.newBuilder()
         val requestOrigin = originOf(originalRequest.url.toString())
         val configuredOrigin = allowedOrigin()?.let { originOf(it) }
-        // A key that knows where it came from is never sent anywhere else, whatever the
-        // configured URL later becomes. A key with no recorded origin predates that
-        // binding and is governed by the configured-server check alone.
+        // A key is only ever sent to the server it was entered for. A key with no
+        // recorded origin cannot be shown to belong anywhere, so it is withheld rather
+        // than guessed at; re-entering it in Settings records the binding.
         val keyOrigin = tokenStorage.getTokenOrigin()?.let { originOf(it) }
 
         val mayAuthenticate = (configuredOrigin == null || configuredOrigin == requestOrigin) &&
-            (keyOrigin == null || keyOrigin == requestOrigin)
+            (keyOrigin != null && keyOrigin == requestOrigin)
 
         if (mayAuthenticate &&
             !token.isNullOrBlank() &&

@@ -29,7 +29,10 @@ class CaptureRepositoryTest {
         mockWebServer = MockWebServer()
         mockWebServer.start()
 
-        tokenStorage = InMemorySecureTokenStorage(initialToken = "test-capture-bearer-token")
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "test-capture-bearer-token",
+            initialOrigin = mockWebServer.url("/").toString()
+        )
 
         val baseUrl = mockWebServer.url("/").toString()
         val okHttpClient = ApiClient.createOkHttpClient(tokenStorage)

@@ -53,6 +53,7 @@ class MemexUiInstrumentationTest {
 
     private var originalServerUrl: String = SharedPreferencesAppPreferences.DEFAULT_SERVER_URL
     private var originalToken: String? = null
+    private var originalTokenOrigin: String? = null
     private var serverUrlOverridden = false
     private var tokenOverridden = false
 
@@ -66,6 +67,9 @@ class MemexUiInstrumentationTest {
 
         originalServerUrl = appPreferences.serverUrl
         originalToken = tokenStorage.getToken()
+        // The origin is part of the credential: restoring the token without it would
+        // leave the real device key unbound and therefore unusable.
+        originalTokenOrigin = tokenStorage.getTokenOrigin()
 
         state = FakeBackendState()
         mockWebServer = MockWebServer()
@@ -75,9 +79,10 @@ class MemexUiInstrumentationTest {
         // Point the app at the loopback mock BEFORE the activity reads the preference.
         // Each override is flagged only once it has actually happened, so teardown never
         // "restores" a setting this test did not replace.
-        appPreferences.serverUrl = mockWebServer.url("/").toString()
+        val mockUrl = mockWebServer.url("/").toString()
+        appPreferences.serverUrl = mockUrl
         serverUrlOverridden = true
-        tokenStorage.setToken(INSTRUMENTATION_TOKEN)
+        tokenStorage.setToken(INSTRUMENTATION_TOKEN, mockUrl)
         tokenOverridden = true
 
         scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -103,7 +108,7 @@ class MemexUiInstrumentationTest {
                 } finally {
                     if (tokenOverridden) {
                         tokenOverridden = false
-                        tokenStorage.setToken(originalToken)
+                        tokenStorage.setToken(originalToken, originalTokenOrigin)
                     }
                 }
             }

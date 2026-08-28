@@ -2,6 +2,7 @@ package com.memex.android.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.memex.android.data.api.AuthInterceptor
 import com.memex.android.data.local.AppPreferences
 import com.memex.android.data.security.SecureTokenStorage
 import kotlinx.coroutines.CancellationException
@@ -12,7 +13,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -98,24 +98,31 @@ class SettingsViewModel(
             return
         }
 
-        // What matters is the origin the stored key was issued for, not merely the URL
-        // that happened to be configured last.
-        val keyOrigin = tokenStorage.getTokenOrigin() ?: appPreferences.serverUrl
-        val originChanged = originOf(normalizedUrl) != originOf(keyOrigin)
         val enteredToken = state.tokenInput.takeIf { it.isNotBlank() }
 
-        // A key belongs to the server it was issued for; never forward it to a new one.
-        val credentialDropped = originChanged && enteredToken == null &&
-            !tokenStorage.getToken().isNullOrBlank()
-        if (credentialDropped) {
-            tokenStorage.clearToken()
+        // A stored key survives only if it can prove it was issued for this server. One
+        // with a different origin — or none recorded at all — is unusable everywhere
+        // (the interceptor withholds it), so it is discarded rather than kept as a
+        // liability, and the user is asked to re-enter it.
+        val credentialDropped = if (enteredToken != null) {
+            tokenStorage.setToken(enteredToken, normalizedUrl)
+            false
+        } else {
+            val storedToken = tokenStorage.getToken()
+            val storedOrigin = tokenStorage.getTokenOrigin()
+            val stillApplies = storedOrigin != null &&
+                AuthInterceptor.originOf(storedOrigin) == AuthInterceptor.originOf(normalizedUrl)
+            if (!storedToken.isNullOrBlank() && !stillApplies) {
+                tokenStorage.clearToken()
+                true
+            } else {
+                false
+            }
         }
 
         appPreferences.serverUrl = normalizedUrl
-        if (enteredToken != null) {
-            tokenStorage.setToken(enteredToken, normalizedUrl)
-        }
 
+        // Guaranteed by the branch above to be bound to normalizedUrl, or absent.
         val token = tokenStorage.getToken()
 
         _uiState.update {
@@ -145,8 +152,8 @@ class SettingsViewModel(
                         onSuccess = { message ->
                             if (credentialDropped) {
                                 ConnectionResult.Success(
-                                    "$message\n\nThe previous device key was discarded because the " +
-                                        "server changed. Enter the key for this server."
+                                    "$message\n\nThe stored device key was discarded because it was " +
+                                        "not issued for this server. Enter the key for this server."
                                 )
                             } else {
                                 ConnectionResult.Success(message)
@@ -167,11 +174,5 @@ class SettingsViewModel(
         if (url.scheme != "http" && url.scheme != "https") return null
         if (url.host.isBlank()) return null
         return url.toString()
-    }
-
-    /** Scheme, host, and port — what decides whether a stored key still applies. */
-    private fun originOf(url: String): String {
-        val parsed: HttpUrl = url.trim().toHttpUrlOrNull() ?: return url.trim()
-        return "${parsed.scheme}://${parsed.host}:${parsed.port}"
     }
 }

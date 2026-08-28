@@ -140,6 +140,36 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun testProbeNeverReceivesAKeyWithNoRecordedOrigin() = runTest {
+        // A key that cannot say which server it belongs to is unusable everywhere, so
+        // it is discarded rather than probed with.
+        tokenStorage = InMemorySecureTokenStorage(initialToken = "legacy-key")
+        val viewModel = viewModel()
+
+        viewModel.saveAndTestConnection()
+        advanceUntilIdle()
+
+        assertEquals(listOf<String?>(null), testedTokens)
+        assertNull(tokenStorage.getToken())
+        assertFalse(viewModel.uiState.value.hasStoredToken)
+    }
+
+    @Test
+    fun testProbeNeverReceivesAKeyBoundToAnotherServer() = runTest {
+        tokenStorage = InMemorySecureTokenStorage(
+            initialToken = "other-server-key",
+            initialOrigin = "https://elsewhere.example.com/"
+        )
+        val viewModel = viewModel()
+
+        viewModel.saveAndTestConnection()
+        advanceUntilIdle()
+
+        assertEquals(listOf<String?>(null), testedTokens)
+        assertNull(tokenStorage.getToken())
+    }
+
+    @Test
     fun testFailedProbeSurfacesTheError() = runTest {
         testerResult = Result.failure(Exception("Unauthorized"))
         val viewModel = viewModel()

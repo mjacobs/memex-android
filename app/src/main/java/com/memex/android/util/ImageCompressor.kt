@@ -101,10 +101,35 @@ class DefaultImageCompressor : ImageCompressor {
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
 
-            val decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions)
+            val decoded = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions)
                 ?: throw IllegalArgumentException("Failed to decode image data into bitmap")
 
-            return scaleAndCompress(decodedBitmap, maxBytes)
+            val finalBitmap = if (maxOf(decoded.width, decoded.height) > ImageCompressor.MAX_DIMENSION) {
+                val maxDim = maxOf(decoded.width, decoded.height)
+                val scale = ImageCompressor.MAX_DIMENSION.toFloat() / maxDim.toFloat()
+                val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
+                val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+                if (scaled != decoded) {
+                    decoded.recycle()
+                }
+                scaled
+            } else {
+                decoded
+            }
+
+            val resultBytes = try {
+                compressToJpegBytes(finalBitmap, maxBytes)
+            } finally {
+                finalBitmap.recycle()
+            }
+
+            val base64 = Base64.getEncoder().encodeToString(resultBytes)
+            return CompressedImage(
+                bytes = resultBytes,
+                base64 = base64,
+                mime = ImageCompressor.DEFAULT_MIME_TYPE
+            )
         } catch (e: IllegalArgumentException) {
             throw e
         } catch (e: Exception) {
@@ -114,10 +139,10 @@ class DefaultImageCompressor : ImageCompressor {
 
     override fun compressStream(openStream: () -> InputStream?, maxBytes: Long): CompressedImage {
         try {
-            val boundsStream = openStream() ?: throw IllegalArgumentException("Failed to open image input stream")
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
+            val boundsStream = openStream() ?: throw IllegalArgumentException("Failed to open image input stream")
             boundsStream.use { stream ->
                 BitmapFactory.decodeStream(stream, null, options)
             }
@@ -138,11 +163,36 @@ class DefaultImageCompressor : ImageCompressor {
             }
 
             val decodeStream = openStream() ?: throw IllegalArgumentException("Failed to reopen image input stream for decoding")
-            val decodedBitmap = decodeStream.use { stream ->
+            val decoded = decodeStream.use { stream ->
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
             } ?: throw IllegalArgumentException("Failed to decode image stream into bitmap")
 
-            return scaleAndCompress(decodedBitmap, maxBytes)
+            val finalBitmap = if (maxOf(decoded.width, decoded.height) > ImageCompressor.MAX_DIMENSION) {
+                val maxDim = maxOf(decoded.width, decoded.height)
+                val scale = ImageCompressor.MAX_DIMENSION.toFloat() / maxDim.toFloat()
+                val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
+                val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+                if (scaled != decoded) {
+                    decoded.recycle()
+                }
+                scaled
+            } else {
+                decoded
+            }
+
+            val resultBytes = try {
+                compressToJpegBytes(finalBitmap, maxBytes)
+            } finally {
+                finalBitmap.recycle()
+            }
+
+            val base64 = Base64.getEncoder().encodeToString(resultBytes)
+            return CompressedImage(
+                bytes = resultBytes,
+                base64 = base64,
+                mime = ImageCompressor.DEFAULT_MIME_TYPE
+            )
         } catch (e: IllegalArgumentException) {
             throw e
         } catch (e: Exception) {
@@ -150,26 +200,34 @@ class DefaultImageCompressor : ImageCompressor {
         }
     }
 
-    private fun scaleAndCompress(bitmap: Bitmap, maxBytes: Long): CompressedImage {
-        var currentBitmap = bitmap
-
-        // Precisely scale down to 1600 if max dimension still exceeds 1600
-        val maxDim = maxOf(currentBitmap.width, currentBitmap.height)
-        if (maxDim > ImageCompressor.MAX_DIMENSION) {
+    override fun compressBitmap(bitmap: Bitmap, maxBytes: Long): CompressedImage {
+        val maxDim = maxOf(bitmap.width, bitmap.height)
+        val intermediateBitmap = if (maxDim > ImageCompressor.MAX_DIMENSION) {
             val scale = ImageCompressor.MAX_DIMENSION.toFloat() / maxDim.toFloat()
-            val targetWidth = (currentBitmap.width * scale).roundToInt().coerceAtLeast(1)
-            val targetHeight = (currentBitmap.height * scale).roundToInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(currentBitmap, targetWidth, targetHeight, true)
-            if (scaled != currentBitmap && currentBitmap != bitmap) {
-                currentBitmap.recycle()
-            }
-            currentBitmap = scaled
+            val targetWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+            val targetHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+            val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+            if (scaled != bitmap) scaled else null
+        } else {
+            null
         }
 
-        return compressBitmap(currentBitmap, maxBytes)
+        val bitmapToCompress = intermediateBitmap ?: bitmap
+        val resultBytes = try {
+            compressToJpegBytes(bitmapToCompress, maxBytes)
+        } finally {
+            intermediateBitmap?.recycle()
+        }
+
+        val base64 = Base64.getEncoder().encodeToString(resultBytes)
+        return CompressedImage(
+            bytes = resultBytes,
+            base64 = base64,
+            mime = ImageCompressor.DEFAULT_MIME_TYPE
+        )
     }
 
-    override fun compressBitmap(bitmap: Bitmap, maxBytes: Long): CompressedImage {
+    private fun compressToJpegBytes(bitmap: Bitmap, maxBytes: Long): ByteArray {
         var currentBitmap = bitmap
         val targetBytes = minOf(maxBytes, ImageCompressor.TARGET_SAFE_BYTES)
 
@@ -189,13 +247,15 @@ class DefaultImageCompressor : ImageCompressor {
 
         // If still too large, downscale dimensions
         while (resultBytes.size > targetBytes && currentBitmap.width > 200 && currentBitmap.height > 200) {
-            val scaledWidth = (currentBitmap.width * 0.75f).roundToInt()
-            val scaledHeight = (currentBitmap.height * 0.75f).roundToInt()
+            val scaledWidth = (currentBitmap.width * 0.75f).roundToInt().coerceAtLeast(1)
+            val scaledHeight = (currentBitmap.height * 0.75f).roundToInt().coerceAtLeast(1)
             val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, true)
-            if (scaledBitmap != currentBitmap && currentBitmap != bitmap) {
-                currentBitmap.recycle()
+            if (scaledBitmap != currentBitmap) {
+                if (currentBitmap != bitmap) {
+                    currentBitmap.recycle()
+                }
+                currentBitmap = scaledBitmap
             }
-            currentBitmap = scaledBitmap
 
             quality = 80
             stream.reset()
@@ -203,11 +263,10 @@ class DefaultImageCompressor : ImageCompressor {
             resultBytes = stream.toByteArray()
         }
 
-        val base64 = Base64.getEncoder().encodeToString(resultBytes)
-        return CompressedImage(
-            bytes = resultBytes,
-            base64 = base64,
-            mime = ImageCompressor.DEFAULT_MIME_TYPE
-        )
+        if (currentBitmap != bitmap) {
+            currentBitmap.recycle()
+        }
+
+        return resultBytes
     }
 }

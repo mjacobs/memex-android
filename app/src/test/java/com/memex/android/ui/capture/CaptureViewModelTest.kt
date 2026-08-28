@@ -276,6 +276,50 @@ class CaptureViewModelTest {
         assertNull(viewModel.viewState.value.errorMessage)
     }
 
+    @Test
+    fun testImageUriSelectionInvokesStreamSupplierAndClosesStream() = runTest {
+        fakeCaptureRepository.imageResult = Result.success(
+            CaptureResponse(
+                capture = Capture(id = "01j6cap_uri_img", status = "enriched", noteId = "01j6not_uri_img")
+            )
+        )
+
+        viewModel.setMode(CaptureMode.IMAGE)
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+        val testUri = io.mockk.mockk<android.net.Uri>()
+        val dummyData = byteArrayOf(10, 20, 30, 40, 50)
+
+        var streamClosed = false
+        val testStream = object : java.io.ByteArrayInputStream(dummyData) {
+            override fun close() {
+                super.close()
+                streamClosed = true
+            }
+        }
+
+        io.mockk.every { mockResolver.openInputStream(testUri) } returns testStream
+
+        viewModel.onImageUriSelected(mockResolver, testUri)
+        assertTrue(viewModel.viewState.value.isProcessingImage)
+
+        advanceUntilIdle()
+
+        val selectedState = viewModel.viewState.value
+        assertFalse(selectedState.isProcessingImage)
+        assertNotNull(selectedState.selectedImageBytes)
+        assertEquals(5, selectedState.selectedImageBytes?.size)
+        assertTrue(fakeImageCompressor.streamSupplierCalled)
+        assertTrue(streamClosed, "Stream must be cleanly closed by compressStream")
+        assertTrue(selectedState.canSubmit)
+
+        viewModel.submitImage()
+        advanceUntilIdle()
+
+        val finishedState = viewModel.viewState.value
+        assertTrue(finishedState.uiState is CaptureUiState.Success)
+        assertEquals("01j6not_uri_img", finishedState.lastCapturedResponse?.capture?.noteId)
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())
@@ -360,11 +404,18 @@ class CaptureViewModelTest {
     }
 
     private class FakeImageCompressor : ImageCompressor {
+        var streamSupplierCalled = false
+
         override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage =
             CompressedImage(bytes = imageBytes, base64 = "base64_encoded_dummy")
 
-        override fun compressStream(openStream: () -> InputStream?, maxBytes: Long): CompressedImage =
-            CompressedImage(bytes = byteArrayOf(1, 2, 3), base64 = "base64_encoded_dummy")
+        override fun compressStream(openStream: () -> InputStream?, maxBytes: Long): CompressedImage {
+            streamSupplierCalled = true
+            val stream = openStream() ?: throw IllegalArgumentException("Failed to open stream")
+            val bytes = stream.use { it.readBytes() }
+            val base64 = "base64_encoded_stream_${bytes.size}"
+            return CompressedImage(bytes = bytes, base64 = base64)
+        }
 
         override fun compressBitmap(bitmap: android.graphics.Bitmap, maxBytes: Long): CompressedImage =
             CompressedImage(bytes = byteArrayOf(), base64 = "base64_encoded_dummy")

@@ -10,23 +10,26 @@ import java.util.Base64
  */
 interface ImageCompressor {
     /**
-     * Compresses the provided image bytes to be strictly under [maxBytes] (defaults to 1,000,000 bytes).
+     * Compresses the provided image bytes to be strictly under [maxBytes] (defaults to 1,000,000 bytes)
+     * using JPEG encoding.
+     * Throws [IllegalArgumentException] if [imageBytes] cannot be decoded into a valid bitmap.
      */
     fun compress(imageBytes: ByteArray, maxBytes: Long = MAX_IMAGE_BYTES): ByteArray
 
     /**
-     * Compresses bitmap to byte array strictly under [maxBytes].
+     * Compresses bitmap to JPEG byte array strictly under [maxBytes].
      */
     fun compressBitmap(bitmap: Bitmap, maxBytes: Long = MAX_IMAGE_BYTES): ByteArray
 
     /**
-     * Compresses image bytes and returns a standard Base64 encoded string.
+     * Compresses image bytes to JPEG and returns a standard Base64 encoded string.
      */
     fun compressToBase64(imageBytes: ByteArray, maxBytes: Long = MAX_IMAGE_BYTES): String
 
     companion object {
         const val MAX_IMAGE_BYTES = 1_000_000L // Strictly < 1 MB
         const val TARGET_SAFE_BYTES = 950_000L
+        const val DEFAULT_MIME_TYPE = "image/jpeg"
     }
 }
 
@@ -40,34 +43,38 @@ class DefaultImageCompressor : ImageCompressor {
             return imageBytes
         }
 
-        // If already well below threshold and valid, check if we need any recompression
-        if (imageBytes.size < maxBytes) {
-            // Verify if it can be decoded, if so return as is or ensure standard jpeg
-            return imageBytes
+        try {
+            // Decode bounds to verify validity and calculate inSampleSize
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, options)
+
+            if (options.outWidth <= 0 || options.outHeight <= 0) {
+                throw IllegalArgumentException("Unable to decode image bytes: invalid or unsupported image format")
+            }
+
+            val targetDimension = 1920
+            var sampleSize = 1
+            val maxDim = maxOf(options.outWidth, options.outHeight)
+            while (maxDim / sampleSize > targetDimension * 2) {
+                sampleSize *= 2
+            }
+
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+
+            val decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions)
+                ?: throw IllegalArgumentException("Failed to decode image data into bitmap")
+
+            return compressBitmap(decodedBitmap, maxBytes)
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Unable to decode image bytes: ${e.message}", e)
         }
-
-        // Decode bounds to calculate inSampleSize
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
-        BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, options)
-
-        val targetDimension = 1920
-        var sampleSize = 1
-        val maxDim = maxOf(options.outWidth, options.outHeight)
-        while (maxDim / sampleSize > targetDimension * 2) {
-            sampleSize *= 2
-        }
-
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.RGB_565
-        }
-
-        val decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions)
-            ?: return if (imageBytes.size < maxBytes) imageBytes else imageBytes.copyOf(maxBytes.toInt())
-
-        return compressBitmap(decodedBitmap, maxBytes)
     }
 
     override fun compressBitmap(bitmap: Bitmap, maxBytes: Long): ByteArray {

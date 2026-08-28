@@ -1,5 +1,7 @@
 package com.memex.android.ui.capture
 
+import android.content.ContentResolver
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.memex.android.data.api.CaptureResponse
@@ -7,13 +9,18 @@ import com.memex.android.data.repository.CaptureRepository
 import com.memex.android.util.AudioRecorder
 import com.memex.android.util.DefaultImageCompressor
 import com.memex.android.util.ImageCompressor
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /**
  * Capture modes supported in the Quick Capture interface.
@@ -73,13 +80,18 @@ data class CaptureViewState(
 class CaptureViewModel(
     private val captureRepository: CaptureRepository,
     private val audioRecorder: AudioRecorder? = null,
-    private val imageCompressor: ImageCompressor = DefaultImageCompressor()
+    private val imageCompressor: ImageCompressor = DefaultImageCompressor(),
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
     private val _viewState = MutableStateFlow(CaptureViewState())
     val viewState: StateFlow<CaptureViewState> = _viewState.asStateFlow()
 
     private var recorderObservationJob: Job? = null
+    private var submissionJob: Job? = null
+    private var compressionJob: Job? = null
+    private var activeRecordedAudioFile: File? = null
 
     init {
         observeRecorderState()
@@ -135,9 +147,12 @@ class CaptureViewModel(
     }
 
     fun onImageSelected(bytes: ByteArray) {
-        viewModelScope.launch {
+        compressionJob?.cancel()
+        compressionJob = viewModelScope.launch {
             try {
-                val base64 = imageCompressor.compressToBase64(bytes)
+                val base64 = withContext(defaultDispatcher) {
+                    imageCompressor.compressToBase64(bytes)
+                }
                 _viewState.update {
                     it.copy(
                         selectedImageBytes = bytes,
@@ -145,6 +160,37 @@ class CaptureViewModel(
                         errorMessage = null
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _viewState.update {
+                    it.copy(errorMessage = "Failed to process image: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
+        compressionJob?.cancel()
+        compressionJob = viewModelScope.launch {
+            try {
+                val bytes = withContext(ioDispatcher) {
+                    contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IOException("Could not read image data from URI")
+
+                val base64 = withContext(defaultDispatcher) {
+                    imageCompressor.compressToBase64(bytes)
+                }
+
+                _viewState.update {
+                    it.copy(
+                        selectedImageBytes = bytes,
+                        selectedImageBase64 = base64,
+                        errorMessage = null
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _viewState.update {
                     it.copy(errorMessage = "Failed to process image: ${e.message}")
@@ -159,6 +205,7 @@ class CaptureViewModel(
             return
         }
         try {
+            activeRecordedAudioFile = outputFile
             recorder.start(outputFile)
             _viewState.update {
                 it.copy(
@@ -167,6 +214,7 @@ class CaptureViewModel(
                 )
             }
         } catch (e: Exception) {
+            activeRecordedAudioFile = null
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Error("Failed to start recording: ${e.message}"),
@@ -180,6 +228,10 @@ class CaptureViewModel(
         val recorder = audioRecorder ?: return
         val recordedFile = recorder.stop()
         if (recordedFile == null || !recordedFile.exists() || recordedFile.length() == 0L) {
+            try {
+                recordedFile?.delete()
+            } catch (_: Exception) {}
+            activeRecordedAudioFile = null
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Error("No audio recorded"),
@@ -189,7 +241,9 @@ class CaptureViewModel(
             return
         }
 
-        viewModelScope.launch {
+        activeRecordedAudioFile = recordedFile
+        submissionJob?.cancel()
+        submissionJob = viewModelScope.launch {
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Uploading("Uploading audio and generating transcript..."),
@@ -197,31 +251,39 @@ class CaptureViewModel(
                 )
             }
 
-            val result = captureRepository.captureAudioFile(
-                audioFile = recordedFile,
-                mimeType = "audio/mp4",
-                pollIntervalMs = pollIntervalMs,
-                maxAttempts = maxAttempts
-            )
+            try {
+                val result = captureRepository.captureAudioFile(
+                    audioFile = recordedFile,
+                    mimeType = "audio/mp4",
+                    pollIntervalMs = pollIntervalMs,
+                    maxAttempts = maxAttempts
+                )
 
-            result.onSuccess { response ->
+                result.onSuccess { response ->
+                    _viewState.update {
+                        it.copy(
+                            uiState = CaptureUiState.Success(response),
+                            lastCapturedResponse = response,
+                            recordingDurationSeconds = 0L,
+                            amplitude = 0f
+                        )
+                    }
+                }.onFailure { err ->
+                    _viewState.update {
+                        it.copy(
+                            uiState = CaptureUiState.Error(err.message ?: "Audio capture failed"),
+                            errorMessage = err.message
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
                 try {
                     recordedFile.delete()
                 } catch (_: Exception) {}
-                _viewState.update {
-                    it.copy(
-                        uiState = CaptureUiState.Success(response),
-                        lastCapturedResponse = response,
-                        recordingDurationSeconds = 0L,
-                        amplitude = 0f
-                    )
-                }
-            }.onFailure { err ->
-                _viewState.update {
-                    it.copy(
-                        uiState = CaptureUiState.Error(err.message ?: "Audio capture failed"),
-                        errorMessage = err.message
-                    )
+                if (activeRecordedAudioFile == recordedFile) {
+                    activeRecordedAudioFile = null
                 }
             }
         }
@@ -229,6 +291,11 @@ class CaptureViewModel(
 
     fun cancelRecording() {
         audioRecorder?.cancel()
+        try {
+            activeRecordedAudioFile?.delete()
+        } catch (_: Exception) {}
+        activeRecordedAudioFile = null
+
         _viewState.update {
             it.copy(
                 isRecording = false,
@@ -243,7 +310,8 @@ class CaptureViewModel(
         val text = _viewState.value.textInput.trim()
         if (text.isBlank()) return
 
-        viewModelScope.launch {
+        submissionJob?.cancel()
+        submissionJob = viewModelScope.launch {
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Uploading("Saving and enriching text note..."),
@@ -275,7 +343,8 @@ class CaptureViewModel(
         val url = _viewState.value.linkUrl.trim()
         if (url.isBlank()) return
 
-        viewModelScope.launch {
+        submissionJob?.cancel()
+        submissionJob = viewModelScope.launch {
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Uploading("Saving and enriching link..."),
@@ -313,7 +382,8 @@ class CaptureViewModel(
     fun submitImage(pollIntervalMs: Long = 1000L, maxAttempts: Int = 30) {
         val base64 = _viewState.value.selectedImageBase64 ?: return
 
-        viewModelScope.launch {
+        submissionJob?.cancel()
+        submissionJob = viewModelScope.launch {
             _viewState.update {
                 it.copy(
                     uiState = CaptureUiState.Uploading("Uploading image and extracting notes..."),
@@ -361,7 +431,23 @@ class CaptureViewModel(
     }
 
     fun reset() {
+        submissionJob?.cancel()
+        submissionJob = null
+        compressionJob?.cancel()
+        compressionJob = null
         cancelRecording()
         _viewState.value = CaptureViewState()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        recorderObservationJob?.cancel()
+        submissionJob?.cancel()
+        compressionJob?.cancel()
+        try {
+            activeRecordedAudioFile?.delete()
+        } catch (_: Exception) {}
+        activeRecordedAudioFile = null
+        audioRecorder?.release()
     }
 }

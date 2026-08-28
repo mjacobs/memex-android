@@ -1,6 +1,9 @@
 package com.memex.android.ui.capture
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -49,24 +52,29 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.memex.android.data.api.CaptureResponse
 import com.memex.android.ui.components.AudioWaveformMeter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
@@ -84,6 +92,20 @@ fun QuickCaptureBottomSheet(
 ) {
     val viewState by viewModel.viewState.collectAsState()
     val context = LocalContext.current
+
+    var permissionErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            permissionErrorMessage = null
+            val tempFile = File(context.cacheDir, "capture_voice_${System.currentTimeMillis()}.m4a")
+            viewModel.startRecording(tempFile)
+        } else {
+            permissionErrorMessage = "Audio recording permission is required to capture voice notes."
+        }
+    }
 
     LaunchedEffect(viewState.uiState) {
         val state = viewState.uiState
@@ -137,25 +159,37 @@ fun QuickCaptureBottomSheet(
             ) {
                 Tab(
                     selected = viewState.mode == CaptureMode.TEXT,
-                    onClick = { viewModel.setMode(CaptureMode.TEXT) },
+                    onClick = {
+                        permissionErrorMessage = null
+                        viewModel.setMode(CaptureMode.TEXT)
+                    },
                     text = { Text("Text") },
                     icon = { Icon(Icons.Default.Edit, contentDescription = "Text") }
                 )
                 Tab(
                     selected = viewState.mode == CaptureMode.VOICE,
-                    onClick = { viewModel.setMode(CaptureMode.VOICE) },
+                    onClick = {
+                        permissionErrorMessage = null
+                        viewModel.setMode(CaptureMode.VOICE)
+                    },
                     text = { Text("Voice") },
                     icon = { Icon(Icons.Default.Mic, contentDescription = "Voice") }
                 )
                 Tab(
                     selected = viewState.mode == CaptureMode.IMAGE,
-                    onClick = { viewModel.setMode(CaptureMode.IMAGE) },
+                    onClick = {
+                        permissionErrorMessage = null
+                        viewModel.setMode(CaptureMode.IMAGE)
+                    },
                     text = { Text("Image") },
                     icon = { Icon(Icons.Default.Image, contentDescription = "Image") }
                 )
                 Tab(
                     selected = viewState.mode == CaptureMode.LINK,
-                    onClick = { viewModel.setMode(CaptureMode.LINK) },
+                    onClick = {
+                        permissionErrorMessage = null
+                        viewModel.setMode(CaptureMode.LINK)
+                    },
                     text = { Text("Link") },
                     icon = { Icon(Icons.Default.Link, contentDescription = "Link") }
                 )
@@ -163,9 +197,10 @@ fun QuickCaptureBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Error Banner
+            // Display active error (either ViewModel or permission error)
+            val displayedError = viewState.errorMessage ?: permissionErrorMessage
             AnimatedVisibility(
-                visible = viewState.errorMessage != null,
+                visible = displayedError != null,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
@@ -187,12 +222,15 @@ fun QuickCaptureBottomSheet(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = viewState.errorMessage ?: "",
+                            text = displayedError ?: "",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(onClick = { viewModel.dismissError() }) {
+                        IconButton(onClick = {
+                            permissionErrorMessage = null
+                            viewModel.dismissError()
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Dismiss error",
@@ -240,8 +278,18 @@ fun QuickCaptureBottomSheet(
                     amplitude = viewState.amplitude,
                     isSubmitting = viewState.isSubmitting,
                     onStartRecording = {
-                        val tempFile = File(context.cacheDir, "capture_voice_${System.currentTimeMillis()}.m4a")
-                        viewModel.startRecording(tempFile)
+                        val hasPermission = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasPermission) {
+                            permissionErrorMessage = null
+                            val tempFile = File(context.cacheDir, "capture_voice_${System.currentTimeMillis()}.m4a")
+                            viewModel.startRecording(tempFile)
+                        } else {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     },
                     onStopRecording = { viewModel.stopRecordingAndSubmit() },
                     onCancelRecording = { viewModel.cancelRecording() }
@@ -250,7 +298,9 @@ fun QuickCaptureBottomSheet(
                     selectedBytes = viewState.selectedImageBytes,
                     caption = viewState.imageCaption,
                     isSubmitting = viewState.isSubmitting,
-                    onImageSelected = { viewModel.onImageSelected(it) },
+                    onImageUriSelected = { uri ->
+                        viewModel.onImageUriSelected(context.contentResolver, uri)
+                    },
                     onCaptionChanged = { viewModel.updateImageCaption(it) },
                     onSubmit = { viewModel.submitImage() }
                 )
@@ -420,32 +470,32 @@ private fun ImageCaptureContent(
     selectedBytes: ByteArray?,
     caption: String,
     isSubmitting: Boolean,
-    onImageSelected: (ByteArray) -> Unit,
+    onImageUriSelected: (Uri) -> Unit,
     onCaptionChanged: (String) -> Unit,
     onSubmit: () -> Unit
 ) {
-    val context = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
-            try {
-                val stream = context.contentResolver.openInputStream(uri)
-                val bytes = stream?.use { it.readBytes() }
-                if (bytes != null && bytes.isNotEmpty()) {
-                    onImageSelected(bytes)
-                }
-            } catch (_: Exception) {}
+            onImageUriSelected(uri)
         }
     }
 
-    val previewBitmap = remember(selectedBytes) {
-        selectedBytes?.let {
-            try {
-                BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap()
-            } catch (_: Exception) {
-                null
+    var previewBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(selectedBytes) {
+        if (selectedBytes != null && selectedBytes.isNotEmpty()) {
+            val bitmap = withContext(Dispatchers.Default) {
+                try {
+                    BitmapFactory.decodeByteArray(selectedBytes, 0, selectedBytes.size)?.asImageBitmap()
+                } catch (_: Exception) {
+                    null
+                }
             }
+            previewBitmap = bitmap
+        } else {
+            previewBitmap = null
         }
     }
 
@@ -459,7 +509,7 @@ private fun ImageCaptureContent(
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Image(
-                    bitmap = previewBitmap,
+                    bitmap = previewBitmap!!,
                     contentDescription = "Selected image preview",
                     modifier = Modifier.matchParentSize()
                 )

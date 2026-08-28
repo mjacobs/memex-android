@@ -6,6 +6,7 @@ import com.memex.android.data.model.Note
 import com.memex.android.data.repository.CaptureRepository
 import com.memex.android.util.AudioRecorder
 import com.memex.android.util.ImageCompressor
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
@@ -44,7 +46,9 @@ class CaptureViewModelTest {
         viewModel = CaptureViewModel(
             captureRepository = fakeCaptureRepository,
             audioRecorder = fakeAudioRecorder,
-            imageCompressor = fakeImageCompressor
+            imageCompressor = fakeImageCompressor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
         )
     }
 
@@ -178,6 +182,7 @@ class CaptureViewModelTest {
         val state = viewModel.viewState.value
         assertTrue(state.uiState is CaptureUiState.Success)
         assertEquals("01j6not_aud", state.lastCapturedResponse?.capture?.noteId)
+        assertFalse(tempFile.exists(), "Audio file should be deleted after upload completes")
     }
 
     @Test
@@ -210,6 +215,45 @@ class CaptureViewModelTest {
     }
 
     @Test
+    fun testResetCancelsInFlightJobsAndClearsState() = runTest {
+        val deferredResponse = CompletableDeferred<CaptureResponse>()
+        val slowRepo = object : FakeCaptureRepository() {
+            override suspend fun captureText(text: String, source: String): Result<CaptureResponse> {
+                return Result.success(deferredResponse.await())
+            }
+        }
+
+        val testVm = CaptureViewModel(
+            captureRepository = slowRepo,
+            audioRecorder = fakeAudioRecorder,
+            imageCompressor = fakeImageCompressor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testVm.updateTextInput("Draft text")
+        testVm.submitText()
+        runCurrent()
+
+        assertTrue(testVm.viewState.value.uiState is CaptureUiState.Uploading)
+
+        testVm.reset()
+        assertEquals(CaptureUiState.Idle, testVm.viewState.value.uiState)
+        assertEquals("", testVm.viewState.value.textInput)
+
+        // Complete deferred after reset
+        deferredResponse.complete(
+            CaptureResponse(
+                capture = Capture(id = "01j6late", status = "enriched")
+            )
+        )
+        advanceUntilIdle()
+
+        // State must remain Idle after reset
+        assertEquals(CaptureUiState.Idle, testVm.viewState.value.uiState)
+    }
+
+    @Test
     fun testResetAndDismissError() {
         viewModel.updateTextInput("Temporary text")
         viewModel.setMode(CaptureMode.LINK)
@@ -222,7 +266,7 @@ class CaptureViewModelTest {
         assertNull(viewModel.viewState.value.errorMessage)
     }
 
-    private class FakeCaptureRepository : CaptureRepository {
+    private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var audioResult: Result<CaptureResponse> = Result.success(CaptureResponse())
@@ -282,6 +326,7 @@ class CaptureViewModelTest {
         override val durationSeconds: StateFlow<Long> = _durationSeconds
 
         override var currentOutputFile: File? = null
+        var isReleased = false
 
         override fun start(outputFile: File) {
             currentOutputFile = outputFile
@@ -300,6 +345,7 @@ class CaptureViewModelTest {
 
         override fun release() {
             cancel()
+            isReleased = true
         }
     }
 

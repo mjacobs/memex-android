@@ -1,8 +1,10 @@
 package com.memex.android.data.api
 
+import okhttp3.RequestBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -84,6 +86,13 @@ interface MemexApiService {
     @POST("api/v1/capture/link")
     suspend fun captureLink(
         @Body request: CaptureRequest
+    ): CaptureResponse
+
+    @POST("api/v1/capture/audio")
+    suspend fun captureAudio(
+        @Body body: RequestBody,
+        @Header("Content-Type") contentType: String = "audio/mp4",
+        @Header("X-Memex-Source") source: String? = "android"
     ): CaptureResponse
 
     @POST("api/v1/capture/image")

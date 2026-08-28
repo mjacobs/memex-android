@@ -127,11 +127,11 @@ data class ChatSession(
  */
 @Serializable
 data class Capture(
-    val id: String,
-    @SerialName("created_at") val createdAt: String,
+    val id: String = "",
+    @SerialName("created_at") val createdAt: String = "",
     val source: String = "android", // "ios" | "desktop" | "web" | "android" | "api"
     @SerialName("device_id") val deviceId: String = "",
-    val kind: String, // "text" | "audio" | "image" | "link"
+    val kind: String = "text", // "text" | "audio" | "image" | "link"
     val text: String? = null,
     val url: String? = null,
     @SerialName("audio_gcs_uri") val audioGcsUri: String? = null,

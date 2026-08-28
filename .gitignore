@@ -13,3 +13,4 @@ app/build/
 .idea/
 *.iml
 .DS_Store
+.home/

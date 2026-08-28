@@ -13,7 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
@@ -112,7 +112,7 @@ fun MemexAppContent(
     modifier: Modifier = Modifier
 ) {
     val feedUiState by feedViewModel.uiState.collectAsState()
-    var showCaptureSheet by remember { mutableStateOf(false) }
+    var showCaptureSheet by rememberSaveable { mutableStateOf(false) }
 
     // Intercept system Back when viewing note detail
     BackHandler(enabled = feedUiState.selectedNote != null) {

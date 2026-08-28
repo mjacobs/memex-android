@@ -84,10 +84,6 @@ fun NoteDetailScreen(
     var showEditDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(noteId) {
-        viewModel.selectNote(noteId)
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(

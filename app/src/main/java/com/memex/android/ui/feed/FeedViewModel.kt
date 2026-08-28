@@ -85,6 +85,7 @@ class FeedViewModel(
         paginationJob?.cancel()
 
         fetchJob = viewModelScope.launch(dispatcher) {
+            val thisJob = coroutineContext[Job]
             _uiState.update {
                 if (refresh) it.copy(isRefreshing = true, isLoadingMore = false, errorMessage = null)
                 else it.copy(isLoading = it.notes.isEmpty(), isLoadingMore = false, errorMessage = null)
@@ -102,26 +103,30 @@ class FeedViewModel(
             }
 
             result.onSuccess { fetchedNotes ->
-                _uiState.update { state ->
-                    val combinedTags = (state.allTags + extractTags(fetchedNotes)).distinct().sorted()
-                    state.copy(
-                        notes = fetchedNotes,
-                        allTags = combinedTags,
-                        isLoading = false,
-                        isRefreshing = false,
-                        isLoadingMore = false,
-                        errorMessage = null
-                    )
+                if (fetchJob === thisJob) {
+                    _uiState.update { state ->
+                        val combinedTags = (state.allTags + extractTags(fetchedNotes)).distinct().sorted()
+                        state.copy(
+                            notes = fetchedNotes,
+                            allTags = combinedTags,
+                            isLoading = false,
+                            isRefreshing = false,
+                            isLoadingMore = false,
+                            errorMessage = null
+                        )
+                    }
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isRefreshing = false,
-                        isLoadingMore = false,
-                        errorMessage = error.message ?: "Failed to load notes"
-                    )
+                if (fetchJob === thisJob) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            isRefreshing = false,
+                            isLoadingMore = false,
+                            errorMessage = error.message ?: "Failed to load notes"
+                        )
+                    }
                 }
             }
         }
@@ -156,6 +161,7 @@ class FeedViewModel(
 
         paginationJob?.cancel()
         paginationJob = viewModelScope.launch(dispatcher) {
+            val thisJob = coroutineContext[Job]
             _uiState.update { it.copy(isLoadingMore = true, errorMessage = null) }
 
             try {
@@ -187,7 +193,9 @@ class FeedViewModel(
                     }
                 }
             } finally {
-                _uiState.update { it.copy(isLoadingMore = false) }
+                if (paginationJob === thisJob) {
+                    _uiState.update { it.copy(isLoadingMore = false) }
+                }
             }
         }
     }

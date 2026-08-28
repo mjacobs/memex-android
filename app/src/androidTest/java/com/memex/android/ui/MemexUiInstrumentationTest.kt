@@ -22,6 +22,11 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -74,11 +79,23 @@ class MemexUiInstrumentationTest {
 
     @After
     fun tearDown() {
-        scenario?.close()
-        scenario = null
-        mockWebServer.shutdown()
-        appPreferences.serverUrl = originalServerUrl
-        tokenStorage.setToken(originalToken)
+        try {
+            scenario?.close()
+            scenario = null
+        } finally {
+            try {
+                if (::mockWebServer.isInitialized) mockWebServer.shutdown()
+            } finally {
+                // Restoring the production URL and the real key must happen even when
+                // setup or shutdown threw, or the device is left pointed at a dead mock.
+                if (::appPreferences.isInitialized) {
+                    appPreferences.serverUrl = originalServerUrl
+                }
+                if (::tokenStorage.isInitialized) {
+                    tokenStorage.setToken(originalToken)
+                }
+            }
+        }
     }
 
     private fun awaitText(text: String, substring: Boolean = false) {
@@ -107,6 +124,17 @@ class MemexUiInstrumentationTest {
         composeTestRule.onNodeWithText("Capture Note").performClick()
 
         awaitText(CAPTURED_NOTE_SUMMARY)
+
+        val captureBody = state.capturedRequestBody.get()
+        assertNotNull("capture request was never received", captureBody)
+        assertTrue(
+            "capture body should carry the typed text: $captureBody",
+            captureBody!!.contains("\"text\":\"Instrumentation capture note\"")
+        )
+        assertTrue(
+            "capture body should identify the android source: $captureBody",
+            captureBody.contains("\"source\":\"android\"")
+        )
     }
 
     @Test
@@ -160,7 +188,7 @@ class MemexUiInstrumentationTest {
         checkbox.performClick()
 
         composeTestRule.waitUntil(timeoutMillis = TIMEOUT_MS) {
-            state.patchedTaskStatus == "done"
+            state.patchedTaskStatus.get() == "done"
         }
 
         // A completed task leaves the Open tab and lands, checked, under Done.
@@ -201,14 +229,18 @@ class MemexUiInstrumentationTest {
     }
 }
 
-/** Mutable fixture state so tests can assert what the app actually sent. */
+/**
+ * Fixture state written on MockWebServer's dispatcher threads and read on the
+ * instrumentation thread, so every field is atomic or copy-on-write.
+ */
 class FakeBackendState {
-    var noteOneSummary: String = "Ship the Android client"
-    var noteOneDeleted: Boolean = false
-    var capturedNoteCreated: Boolean = false
-    var patchedTaskStatus: String? = null
-    val approvedIds = mutableListOf<String>()
-    val rejectedIds = mutableListOf<String>()
+    val noteOneSummary = AtomicReference("Ship the Android client")
+    val noteOneDeleted = AtomicBoolean(false)
+    val capturedNoteCreated = AtomicBoolean(false)
+    val capturedRequestBody = AtomicReference<String?>(null)
+    val patchedTaskStatus = AtomicReference<String?>(null)
+    val approvedIds: MutableList<String> = CopyOnWriteArrayList()
+    val rejectedIds: MutableList<String> = CopyOnWriteArrayList()
 }
 
 /**
@@ -226,7 +258,8 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
             basePath.startsWith("/health") -> json("""{"ok":true}""")
 
             method == "POST" && basePath == "/api/v1/capture" -> {
-                state.capturedNoteCreated = true
+                state.capturedRequestBody.set(request.body.readUtf8())
+                state.capturedNoteCreated.set(true)
                 json("""{"capture":$capturedCapture,"note":$capturedNote,"tasks":[]}""", 201)
             }
 
@@ -241,12 +274,12 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
 
             method == "PATCH" && basePath.startsWith("/api/v1/notes/") -> {
                 val body = request.body.readUtf8()
-                SUMMARY_REGEX.find(body)?.groupValues?.get(1)?.let { state.noteOneSummary = it }
+                SUMMARY_REGEX.find(body)?.groupValues?.get(1)?.let { state.noteOneSummary.set(it) }
                 json("""{"note":${noteOne()}}""")
             }
 
             method == "DELETE" && basePath.startsWith("/api/v1/notes/") -> {
-                state.noteOneDeleted = true
+                state.noteOneDeleted.set(true)
                 json("""{"deleted":"${basePath.substringAfterLast('/')}"}""")
             }
 
@@ -258,7 +291,7 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
             method == "PATCH" && basePath.startsWith("/api/v1/tasks/") -> {
                 val body = request.body.readUtf8()
                 val status = STATUS_REGEX.find(body)?.groupValues?.get(1) ?: "open"
-                state.patchedTaskStatus = status
+                state.patchedTaskStatus.set(status)
                 json("""{"task":${task(status)}}""")
             }
 
@@ -298,15 +331,15 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
 
     private fun notesJson(): String {
         val entries = mutableListOf<String>()
-        if (state.capturedNoteCreated) entries += capturedNote
-        if (!state.noteOneDeleted) entries += noteOne()
+        if (state.capturedNoteCreated.get()) entries += capturedNote
+        if (!state.noteOneDeleted.get()) entries += noteOne()
         entries += noteTwo
         return entries.joinToString(",")
     }
 
     private fun noteOne(): String = """
         {"id":"01j6not_1","created_at":"2026-08-28T12:00:00Z","kind":"capture",
-         "summary":"${state.noteOneSummary}",
+         "summary":"${state.noteOneSummary.get()}",
          "body":"# Rollout plan\nWire the feed to Cloud Run and verify on device.",
          "tags":["android","memex"],"task_ids":["01j6tsk_1"],
          "trace":[
@@ -332,7 +365,7 @@ class FakeMemexDispatcher(private val state: FakeBackendState) : Dispatcher() {
     """.trimIndent().replace("\n", "")
 
     private fun tasksJson(status: String?): String {
-        val taskOneStatus = state.patchedTaskStatus ?: "open"
+        val taskOneStatus = state.patchedTaskStatus.get() ?: "open"
         return listOfNotNull(
             task(taskOneStatus).takeIf { status == null || status == taskOneStatus },
             taskTwo.takeIf { status == null || status == "open" }

@@ -60,6 +60,14 @@ data class PatchTaskRequest(
 )
 
 @Serializable
+data class TaskDetailResponse(
+    val task: Task
+)
+
+typealias DeleteResponse = DeleteNoteResponse
+
+
+@Serializable
 data class ApprovalsResponse(
     val approvals: List<Approval> = emptyList()
 )

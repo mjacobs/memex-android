@@ -444,7 +444,10 @@ class ModelSerializationTest {
             source = "android",
             url = "https://news.ycombinator.com",
             title = "Hacker News",
-            note = "Check out top articles"
+            note = "Check out top articles",
+            imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            mime = "image/png",
+            sourceUrl = "https://news.ycombinator.com"
         )
         val reqJson = json.encodeToString(req)
         val decodedReq = json.decodeFromString<CaptureRequest>(reqJson)
@@ -452,6 +455,9 @@ class ModelSerializationTest {
         assertEquals(req.source, decodedReq.source)
         assertEquals(req.url, decodedReq.url)
         assertEquals(req.title, decodedReq.title)
+        assertEquals(req.imageBase64, decodedReq.imageBase64)
+        assertEquals("image/png", decodedReq.mime)
+        assertEquals(req.sourceUrl, decodedReq.sourceUrl)
 
         val respJson = """
             {

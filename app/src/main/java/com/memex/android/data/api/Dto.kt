@@ -18,7 +18,6 @@ data class CaptureRequest(
     val title: String? = null,
     val note: String? = null,
     @SerialName("image_base64") val imageBase64: String? = null,
-    @SerialName("mime_type") val mimeType: String? = null,
     val mime: String? = null,
     @SerialName("source_url") val sourceUrl: String? = null
 )

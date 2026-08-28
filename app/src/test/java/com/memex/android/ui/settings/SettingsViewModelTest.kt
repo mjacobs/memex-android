@@ -183,6 +183,20 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun testFailedProbeStillReportsThatTheKeyWasDiscarded() = runTest {
+        tokenStorage = InMemorySecureTokenStorage(initialToken = "legacy-key")
+        testerResult = Result.failure(Exception("Unauthorized"))
+        val viewModel = viewModel()
+
+        viewModel.saveAndTestConnection()
+        advanceUntilIdle()
+
+        val result = viewModel.uiState.value.connectionResult as ConnectionResult.Failure
+        assertTrue(result.message.contains("Unauthorized"))
+        assertTrue(result.message.contains("discarded"))
+    }
+
+    @Test
     fun testClearTokenRemovesStoredKey() = runTest {
         val viewModel = viewModel()
 

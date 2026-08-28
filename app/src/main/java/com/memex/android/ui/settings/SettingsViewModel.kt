@@ -150,21 +150,32 @@ class SettingsViewModel(
                     isTesting = false,
                     connectionResult = result.fold(
                         onSuccess = { message ->
-                            if (credentialDropped) {
-                                ConnectionResult.Success(
-                                    "$message\n\nThe stored device key was discarded because it was " +
-                                        "not issued for this server. Enter the key for this server."
-                                )
-                            } else {
-                                ConnectionResult.Success(message)
-                            }
+                            ConnectionResult.Success(withCredentialNotice(message, credentialDropped))
                         },
                         onFailure = { error ->
-                            ConnectionResult.Failure(error.message ?: "Connection failed")
+                            ConnectionResult.Failure(
+                                withCredentialNotice(
+                                    error.message ?: "Connection failed",
+                                    credentialDropped
+                                )
+                            )
                         }
                     )
                 )
             }
+        }
+    }
+
+    /**
+     * A discarded key is news whether the probe succeeded or failed — on failure it is
+     * often the reason, so the notice belongs on both outcomes.
+     */
+    private fun withCredentialNotice(message: String, credentialDropped: Boolean): String {
+        return if (credentialDropped) {
+            "$message\n\nThe stored device key was discarded because it was not issued " +
+                "for this server. Enter the key for this server."
+        } else {
+            message
         }
     }
 

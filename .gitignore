@@ -1,0 +1,15 @@
+# Secrets & Private configs
+.secrets
+local.properties
+
+# Gradle & Build
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+
+# IDE & OS
+.idea/
+*.iml
+.DS_Store

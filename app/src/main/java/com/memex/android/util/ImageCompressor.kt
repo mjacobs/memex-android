@@ -216,7 +216,9 @@ class DefaultImageCompressor : ImageCompressor {
         val resultBytes = try {
             compressToJpegBytes(bitmapToCompress, maxBytes)
         } finally {
-            intermediateBitmap?.recycle()
+            if (intermediateBitmap != null && !intermediateBitmap.isRecycled) {
+                intermediateBitmap.recycle()
+            }
         }
 
         val base64 = Base64.getEncoder().encodeToString(resultBytes)
@@ -229,44 +231,46 @@ class DefaultImageCompressor : ImageCompressor {
 
     private fun compressToJpegBytes(bitmap: Bitmap, maxBytes: Long): ByteArray {
         var currentBitmap = bitmap
-        val targetBytes = minOf(maxBytes, ImageCompressor.TARGET_SAFE_BYTES)
+        try {
+            val targetBytes = minOf(maxBytes, ImageCompressor.TARGET_SAFE_BYTES)
 
-        var quality = 90
-        val stream = ByteArrayOutputStream()
+            var quality = 90
+            val stream = ByteArrayOutputStream()
 
-        currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-        var resultBytes = stream.toByteArray()
-
-        // Iteratively lower quality
-        while (resultBytes.size > targetBytes && quality > 20) {
-            quality -= 15
-            stream.reset()
             currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-            resultBytes = stream.toByteArray()
-        }
+            var resultBytes = stream.toByteArray()
 
-        // If still too large, downscale dimensions
-        while (resultBytes.size > targetBytes && currentBitmap.width > 200 && currentBitmap.height > 200) {
-            val scaledWidth = (currentBitmap.width * 0.75f).roundToInt().coerceAtLeast(1)
-            val scaledHeight = (currentBitmap.height * 0.75f).roundToInt().coerceAtLeast(1)
-            val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, true)
-            if (scaledBitmap != currentBitmap) {
-                if (currentBitmap != bitmap) {
-                    currentBitmap.recycle()
-                }
-                currentBitmap = scaledBitmap
+            // Iteratively lower quality
+            while (resultBytes.size > targetBytes && quality > 20) {
+                quality -= 15
+                stream.reset()
+                currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+                resultBytes = stream.toByteArray()
             }
 
-            quality = 80
-            stream.reset()
-            currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-            resultBytes = stream.toByteArray()
-        }
+            // If still too large, downscale dimensions
+            while (resultBytes.size > targetBytes && currentBitmap.width > 200 && currentBitmap.height > 200) {
+                val scaledWidth = (currentBitmap.width * 0.75f).roundToInt().coerceAtLeast(1)
+                val scaledHeight = (currentBitmap.height * 0.75f).roundToInt().coerceAtLeast(1)
+                val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, true)
+                if (scaledBitmap != currentBitmap) {
+                    if (currentBitmap != bitmap && !currentBitmap.isRecycled) {
+                        currentBitmap.recycle()
+                    }
+                    currentBitmap = scaledBitmap
+                }
 
-        if (currentBitmap != bitmap) {
-            currentBitmap.recycle()
-        }
+                quality = 80
+                stream.reset()
+                currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+                resultBytes = stream.toByteArray()
+            }
 
-        return resultBytes
+            return resultBytes
+        } finally {
+            if (currentBitmap != bitmap && !currentBitmap.isRecycled) {
+                currentBitmap.recycle()
+            }
+        }
     }
 }

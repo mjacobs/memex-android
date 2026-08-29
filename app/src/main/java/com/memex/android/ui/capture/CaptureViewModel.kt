@@ -202,6 +202,11 @@ class CaptureViewModel(
                         draftFile.delete()
                         state.sourceFileName?.let { File(dir, it).delete() }
                         state.imageFileName?.let { File(dir, it).delete() }
+                        try {
+                            dir.listFiles { file ->
+                                file.name.startsWith("draft_source_image") || file.name.startsWith("draft_capture_image")
+                            }?.forEach { it.delete() }
+                        } catch (_: Exception) {}
                         return@withLock
                     }
 
@@ -524,7 +529,6 @@ class CaptureViewModel(
     }
 
     fun onImageSelected(bytes: ByteArray) {
-        val generation = ++currentImageGeneration
         isRestoredOrInitialized = true
         compressionJob?.cancel()
 
@@ -543,26 +547,41 @@ class CaptureViewModel(
         }
 
         val dir = cacheDir
-        val sourceName = "draft_source_image_$generation.bin"
-        val imageName = "draft_capture_image_$generation.jpg"
-        val genSourceFile = dir?.let { File(it, sourceName) }
-        val genImageFile = dir?.let { File(it, imageName) }
+        val oldState = _viewState.value
+        if (dir != null) {
+            oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+            oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+        }
+
+        val generation: Long
+        val sourceName: String
+        val imageName: String
+        val genSourceFile: File?
+        val genImageFile: File?
+
+        synchronized(this) {
+            generation = ++currentImageGeneration
+            sourceName = "draft_source_image_$generation.bin"
+            imageName = "draft_capture_image_$generation.jpg"
+            genSourceFile = dir?.let { File(it, sourceName) }
+            genImageFile = dir?.let { File(it, imageName) }
+
+            _viewState.update {
+                it.copy(
+                    isProcessingImage = true,
+                    selectedImageBytes = null,
+                    selectedImageBase64 = null,
+                    pendingSourceUri = null,
+                    sourceFileName = sourceName,
+                    imageFileName = null,
+                    generation = generation,
+                    errorMessage = null
+                )
+            }
+        }
 
         if (genSourceFile != null) {
             try { genSourceFile.writeBytes(bytes) } catch (_: Exception) {}
-        }
-
-        _viewState.update {
-            it.copy(
-                isProcessingImage = true,
-                selectedImageBytes = null,
-                selectedImageBase64 = null,
-                pendingSourceUri = null,
-                sourceFileName = sourceName,
-                imageFileName = null,
-                generation = generation,
-                errorMessage = null
-            )
         }
         scheduleDraftSnapshot()
 
@@ -579,18 +598,25 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                selectedImageBytes = compressed.bytes,
-                                selectedImageBase64 = compressed.base64,
-                                pendingSourceUri = null,
-                                sourceFileName = sourceName,
-                                imageFileName = imageName,
-                                generation = generation,
-                                errorMessage = null
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                current.copy(
+                                    isProcessingImage = false,
+                                    selectedImageBytes = compressed.bytes,
+                                    selectedImageBase64 = compressed.base64,
+                                    pendingSourceUri = null,
+                                    sourceFileName = sourceName,
+                                    imageFileName = imageName,
+                                    generation = generation,
+                                    errorMessage = null
+                                )
+                            } else {
+                                current
+                            }
                         }
                         scheduleDraftSnapshot()
                     } else {
@@ -606,12 +632,19 @@ class CaptureViewModel(
                 genSourceFile?.delete()
                 genImageFile?.delete()
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                errorMessage = "Failed to process image: ${e.message}"
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                current.copy(
+                                    isProcessingImage = false,
+                                    errorMessage = "Failed to process image: ${e.message}"
+                                )
+                            } else {
+                                current
+                            }
                         }
                         scheduleDraftSnapshot()
                     }
@@ -621,26 +654,39 @@ class CaptureViewModel(
     }
 
     fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
-        val generation = ++currentImageGeneration
         isRestoredOrInitialized = true
         compressionJob?.cancel()
 
         val dir = cacheDir
-        val sourceName = "draft_source_image_$generation.bin"
-        val imageName = "draft_capture_image_$generation.jpg"
-        val tempName = "draft_source_image_$generation.tmp"
+        val oldState = _viewState.value
+        if (dir != null) {
+            oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+            oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+        }
 
-        _viewState.update {
-            it.copy(
-                isProcessingImage = true,
-                selectedImageBytes = null,
-                selectedImageBase64 = null,
-                pendingSourceUri = uri.toString(),
-                sourceFileName = null,
-                imageFileName = null,
-                generation = generation,
-                errorMessage = null
-            )
+        val generation: Long
+        val sourceName: String
+        val imageName: String
+        val tempName: String
+
+        synchronized(this) {
+            generation = ++currentImageGeneration
+            sourceName = "draft_source_image_$generation.bin"
+            imageName = "draft_capture_image_$generation.jpg"
+            tempName = "draft_source_image_$generation.tmp"
+
+            _viewState.update {
+                it.copy(
+                    isProcessingImage = true,
+                    selectedImageBytes = null,
+                    selectedImageBase64 = null,
+                    pendingSourceUri = uri.toString(),
+                    sourceFileName = null,
+                    imageFileName = null,
+                    generation = generation,
+                    errorMessage = null
+                )
+            }
         }
         scheduleDraftSnapshot()
 
@@ -657,7 +703,10 @@ class CaptureViewModel(
                         tempFile.outputStream().use { output ->
                             while (true) {
                                 ensureActive()
-                                if (generation != currentImageGeneration) {
+                                val isCurrent = synchronized(this@CaptureViewModel) {
+                                    generation == currentImageGeneration
+                                }
+                                if (!isCurrent) {
                                     tempFile.delete()
                                     return@launch
                                 }
@@ -672,7 +721,10 @@ class CaptureViewModel(
                         }
                     }
                     ensureActive()
-                    if (generation != currentImageGeneration) {
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (!isCurrent) {
                         tempFile.delete()
                         return@launch
                     }
@@ -690,15 +742,22 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    if (generation != currentImageGeneration) {
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (!isCurrent) {
                         genSourceFile?.delete()
                         return@launch
                     }
-                    _viewState.update {
-                        it.copy(
-                            sourceFileName = sourceName,
-                            pendingSourceUri = null
-                        )
+                    _viewState.update { current ->
+                        if (current.generation == generation) {
+                            current.copy(
+                                sourceFileName = sourceName,
+                                pendingSourceUri = null
+                            )
+                        } else {
+                            current
+                        }
                     }
                     scheduleDraftSnapshot()
                 }
@@ -717,18 +776,25 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                selectedImageBytes = compressed.bytes,
-                                selectedImageBase64 = compressed.base64,
-                                pendingSourceUri = null,
-                                sourceFileName = sourceName,
-                                imageFileName = imageName,
-                                generation = generation,
-                                errorMessage = null
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                current.copy(
+                                    isProcessingImage = false,
+                                    selectedImageBytes = compressed.bytes,
+                                    selectedImageBase64 = compressed.base64,
+                                    pendingSourceUri = null,
+                                    sourceFileName = sourceName,
+                                    imageFileName = imageName,
+                                    generation = generation,
+                                    errorMessage = null
+                                )
+                            } else {
+                                current
+                            }
                         }
                         scheduleDraftSnapshot()
                     } else {
@@ -746,12 +812,19 @@ class CaptureViewModel(
                 genSourceFile?.delete()
                 genImageFile?.delete()
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                errorMessage = "Failed to process image: ${e.message}"
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                current.copy(
+                                    isProcessingImage = false,
+                                    errorMessage = "Failed to process image: ${e.message}"
+                                )
+                            } else {
+                                current
+                            }
                         }
                         scheduleDraftSnapshot()
                     }
@@ -825,27 +898,29 @@ class CaptureViewModel(
                         it.copy(
                             uiState = CaptureUiState.Success(response),
                             lastCapturedResponse = response,
+                            isRecording = false,
                             recordingDurationSeconds = 0L,
                             amplitude = 0f
                         )
                     }
+                    try {
+                        recordedFile.delete()
+                    } catch (_: Exception) {}
+                    activeRecordedAudioFile = null
                 }.onFailure { err ->
                     _viewState.update {
                         it.copy(
-                            uiState = CaptureUiState.Error(err.message ?: "Audio capture failed"),
+                            uiState = CaptureUiState.Error(err.message ?: "Failed to process audio"),
                             errorMessage = err.message
                         )
                     }
                 }
             } catch (e: CancellationException) {
-                throw e
-            } finally {
                 try {
                     recordedFile.delete()
                 } catch (_: Exception) {}
-                if (activeRecordedAudioFile == recordedFile) {
-                    activeRecordedAudioFile = null
-                }
+                activeRecordedAudioFile = null
+                throw e
             }
         }
     }
@@ -862,7 +937,7 @@ class CaptureViewModel(
                 isRecording = false,
                 recordingDurationSeconds = 0L,
                 amplitude = 0f,
-                uiState = CaptureUiState.Idle
+                uiState = if (it.uiState is CaptureUiState.Recording) CaptureUiState.Idle else it.uiState
             )
         }
     }
@@ -997,8 +1072,19 @@ class CaptureViewModel(
         compressionJob?.cancel()
         compressionJob = null
         cancelRecording()
+        val oldState = _viewState.value
         _viewState.value = CaptureViewState()
         _isCaptureSheetVisible.value = false
+        val dir = cacheDir
+        if (dir != null) {
+            oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+            oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
+            try {
+                dir.listFiles { file ->
+                    file.name.startsWith("draft_source_image") || file.name.startsWith("draft_capture_image")
+                }?.forEach { it.delete() }
+            } catch (_: Exception) {}
+        }
         scheduleDraftSnapshot()
     }
 

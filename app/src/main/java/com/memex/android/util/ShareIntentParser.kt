@@ -86,7 +86,7 @@ object ShareIntentParser {
 
     /**
      * Strips sentence-ending punctuation and unmatched closing delimiters in O(N) linear time
-     * while preserving valid parentheses inside URLs and valid terminal characters (e.g. Yahoo!).
+     * while preserving valid URL characters (e.g. semicolons, colons, exclamation marks, balanced quotes).
      */
     fun cleanUrl(rawUrl: String): String {
         if (rawUrl.isEmpty()) return ""
@@ -95,6 +95,10 @@ object ShareIntentParser {
         var closeParens = 0
         var openBrackets = 0
         var closeBrackets = 0
+        var singleQuotes = 0
+        var doubleQuotes = 0
+        var openAngle = 0
+        var closeAngle = 0
 
         for (i in 0 until rawUrl.length) {
             when (rawUrl[i]) {
@@ -102,11 +106,18 @@ object ShareIntentParser {
                 ')' -> closeParens++
                 '[' -> openBrackets++
                 ']' -> closeBrackets++
+                '\'' -> singleQuotes++
+                '"' -> doubleQuotes++
+                '<' -> openAngle++
+                '>' -> closeAngle++
             }
         }
 
         var excessCloseParens = (closeParens - openParens).coerceAtLeast(0)
         var excessCloseBrackets = (closeBrackets - openBrackets).coerceAtLeast(0)
+        var excessSingleQuotes = singleQuotes % 2
+        var excessDoubleQuotes = doubleQuotes % 2
+        var excessCloseAngle = (closeAngle - openAngle).coerceAtLeast(0)
 
         var end = rawUrl.length
         while (end > 0) {
@@ -117,7 +128,16 @@ object ShareIntentParser {
             } else if (lastChar == ']' && excessCloseBrackets > 0) {
                 excessCloseBrackets--
                 end--
-            } else if (lastChar == '.' || lastChar == ',' || lastChar == ';' || lastChar == ':' || lastChar == '"' || lastChar == '\'') {
+            } else if (lastChar == '>' && excessCloseAngle > 0) {
+                excessCloseAngle--
+                end--
+            } else if (lastChar == '\'' && excessSingleQuotes > 0) {
+                excessSingleQuotes--
+                end--
+            } else if (lastChar == '"' && excessDoubleQuotes > 0) {
+                excessDoubleQuotes--
+                end--
+            } else if (lastChar == '.' || lastChar == ',') {
                 end--
             } else {
                 break

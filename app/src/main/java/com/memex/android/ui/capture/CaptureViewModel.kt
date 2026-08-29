@@ -181,6 +181,124 @@ class CaptureViewModel(
     }
 
     /**
+     * Persists capture draft state (including image bytes) to private cache disk to avoid
+     * TransactionTooLargeException in activity instance-state bundles.
+     */
+    fun saveDraftToDisk(cacheDir: File) {
+        try {
+            val state = _viewState.value
+            val isVisible = _isCaptureSheetVisible.value
+            if (!isVisible && state.textInput.isBlank() && state.linkUrl.isBlank() && state.selectedImageBytes == null) {
+                clearDraftFromDisk(cacheDir)
+                return
+            }
+
+            val imageFile = File(cacheDir, "draft_capture_image.jpg")
+            val hasImage = if (state.selectedImageBytes != null && state.selectedImageBytes.isNotEmpty()) {
+                imageFile.writeBytes(state.selectedImageBytes)
+                true
+            } else {
+                if (imageFile.exists()) imageFile.delete()
+                false
+            }
+
+            val draftFile = File(cacheDir, "capture_draft.json")
+            val json = buildString {
+                append("{")
+                append("\"mode\":\"${state.mode.name}\",")
+                append("\"isSheetVisible\":$isVisible,")
+                append("\"textInput\":${escapeJson(state.textInput)},")
+                append("\"linkUrl\":${escapeJson(state.linkUrl)},")
+                append("\"linkTitle\":${escapeJson(state.linkTitle)},")
+                append("\"linkNote\":${escapeJson(state.linkNote)},")
+                append("\"imageCaption\":${escapeJson(state.imageCaption)},")
+                append("\"hasImage\":$hasImage")
+                append("}")
+            }
+            draftFile.writeText(json)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Restores draft state and image bytes from private cache disk after process recreation.
+     */
+    fun restoreDraftFromDisk(cacheDir: File) {
+        try {
+            val draftFile = File(cacheDir, "capture_draft.json")
+            if (!draftFile.exists()) return
+
+            val content = draftFile.readText()
+            val modeName = extractJsonField(content, "mode")
+            val isSheetVisible = content.contains("\"isSheetVisible\":true")
+            val textInput = extractJsonField(content, "textInput")
+            val linkUrl = extractJsonField(content, "linkUrl")
+            val linkTitle = extractJsonField(content, "linkTitle")
+            val linkNote = extractJsonField(content, "linkNote")
+            val imageCaption = extractJsonField(content, "imageCaption")
+            val hasImage = content.contains("\"hasImage\":true")
+
+            val restoredMode = modeName?.let {
+                try { CaptureMode.valueOf(it) } catch (_: Exception) { null }
+            } ?: CaptureMode.TEXT
+
+            val imageFile = File(cacheDir, "draft_capture_image.jpg")
+            var restoredBytes: ByteArray? = null
+            var restoredBase64: String? = null
+            if (hasImage && imageFile.exists()) {
+                try {
+                    val bytes = imageFile.readBytes()
+                    if (bytes.isNotEmpty()) {
+                        restoredBytes = bytes
+                        restoredBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    }
+                } catch (_: Exception) {}
+            }
+
+            _viewState.update {
+                it.copy(
+                    mode = restoredMode,
+                    textInput = textInput.orEmpty(),
+                    linkUrl = linkUrl.orEmpty(),
+                    linkTitle = linkTitle.orEmpty(),
+                    linkNote = linkNote.orEmpty(),
+                    imageCaption = imageCaption.orEmpty(),
+                    selectedImageBytes = restoredBytes,
+                    selectedImageBase64 = restoredBase64,
+                    errorMessage = null
+                )
+            }
+            _isCaptureSheetVisible.value = isSheetVisible
+        } catch (_: Exception) {}
+    }
+
+    fun clearDraftFromDisk(cacheDir: File) {
+        try {
+            File(cacheDir, "capture_draft.json").delete()
+            File(cacheDir, "draft_capture_image.jpg").delete()
+        } catch (_: Exception) {}
+    }
+
+    private fun escapeJson(str: String): String {
+        val escaped = str.replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        return "\"$escaped\""
+    }
+
+    private fun extractJsonField(json: String, fieldName: String): String? {
+        val pattern = "\"$fieldName\":\"((?:[^\"\\\\]|\\\\.)*)\"".toRegex()
+        val match = pattern.find(json) ?: return null
+        val raw = match.groupValues[1]
+        return raw.replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    /**
      * Restores draft capture state and bottom sheet visibility after process recreation.
      */
     fun restoreSavedState(
@@ -190,11 +308,16 @@ class CaptureViewModel(
         linkUrl: String?,
         linkTitle: String?,
         linkNote: String?,
-        imageCaption: String?
+        imageCaption: String?,
+        imageBytes: ByteArray? = null
     ) {
         val restoredMode = modeName?.let {
             try { CaptureMode.valueOf(it) } catch (_: Exception) { null }
         } ?: CaptureMode.TEXT
+
+        val restoredBase64 = imageBytes?.let {
+            try { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } catch (_: Exception) { null }
+        }
 
         _viewState.update {
             it.copy(
@@ -204,6 +327,8 @@ class CaptureViewModel(
                 linkTitle = linkTitle.orEmpty(),
                 linkNote = linkNote.orEmpty(),
                 imageCaption = imageCaption.orEmpty(),
+                selectedImageBytes = imageBytes,
+                selectedImageBase64 = restoredBase64,
                 errorMessage = null
             )
         }

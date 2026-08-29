@@ -189,14 +189,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val KEY_CAPTURE_SHEET_VISIBLE = "key_capture_sheet_visible"
-        private const val KEY_CAPTURE_MODE = "key_capture_mode"
-        private const val KEY_CAPTURE_TEXT = "key_capture_text"
-        private const val KEY_CAPTURE_LINK_URL = "key_capture_link_url"
-        private const val KEY_CAPTURE_LINK_TITLE = "key_capture_link_title"
-        private const val KEY_CAPTURE_LINK_NOTE = "key_capture_link_note"
-        private const val KEY_CAPTURE_IMAGE_CAPTION = "key_capture_image_caption"
         private const val KEY_SHARE_HANDLED = "key_share_handled"
+        private const val KEY_HAS_DRAFT = "key_has_draft"
     }
 
     private var isShareHandled = false
@@ -207,15 +201,9 @@ class MainActivity : ComponentActivity() {
 
         if (savedInstanceState != null) {
             isShareHandled = savedInstanceState.getBoolean(KEY_SHARE_HANDLED, false)
-            captureViewModel.restoreSavedState(
-                modeName = savedInstanceState.getString(KEY_CAPTURE_MODE),
-                isSheetVisible = savedInstanceState.getBoolean(KEY_CAPTURE_SHEET_VISIBLE, false),
-                textInput = savedInstanceState.getString(KEY_CAPTURE_TEXT),
-                linkUrl = savedInstanceState.getString(KEY_CAPTURE_LINK_URL),
-                linkTitle = savedInstanceState.getString(KEY_CAPTURE_LINK_TITLE),
-                linkNote = savedInstanceState.getString(KEY_CAPTURE_LINK_NOTE),
-                imageCaption = savedInstanceState.getString(KEY_CAPTURE_IMAGE_CAPTION)
-            )
+            if (savedInstanceState.getBoolean(KEY_HAS_DRAFT, false)) {
+                captureViewModel.restoreDraftFromDisk(cacheDir)
+            }
         } else {
             handleIncomingShareIntent(intent)
         }
@@ -240,14 +228,11 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHARE_HANDLED, isShareHandled)
-        outState.putBoolean(KEY_CAPTURE_SHEET_VISIBLE, captureViewModel.isCaptureSheetVisible.value)
-        val captureState = captureViewModel.viewState.value
-        outState.putString(KEY_CAPTURE_MODE, captureState.mode.name)
-        outState.putString(KEY_CAPTURE_TEXT, captureState.textInput)
-        outState.putString(KEY_CAPTURE_LINK_URL, captureState.linkUrl)
-        outState.putString(KEY_CAPTURE_LINK_TITLE, captureState.linkTitle)
-        outState.putString(KEY_CAPTURE_LINK_NOTE, captureState.linkNote)
-        outState.putString(KEY_CAPTURE_IMAGE_CAPTION, captureState.imageCaption)
+        val hasDraft = captureViewModel.isCaptureSheetVisible.value
+        outState.putBoolean(KEY_HAS_DRAFT, hasDraft)
+        if (hasDraft) {
+            captureViewModel.saveDraftToDisk(cacheDir)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

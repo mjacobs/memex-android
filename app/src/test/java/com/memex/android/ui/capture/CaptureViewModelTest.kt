@@ -465,6 +465,45 @@ class CaptureViewModelTest {
         assertEquals(CaptureUiState.Idle, state.uiState)
     }
 
+    @Test
+    fun testSaveAndRestoreDraftFromDiskWithImage() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_draft_test").toFile()
+        try {
+            viewModel.openCaptureSheet(CaptureMode.IMAGE)
+            viewModel.updateImageCaption("Restored image caption")
+            val dummyBytes = byteArrayOf(10, 20, 30, 40, 50)
+            viewModel.onImageSelected(dummyBytes)
+            advanceUntilIdle()
+
+            // Save draft to temp disk cache
+            viewModel.saveDraftToDisk(tempDir)
+
+            // Create a fresh ViewModel simulating app recreation after process death
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            freshViewModel.restoreDraftFromDisk(tempDir)
+
+            val restoredState = freshViewModel.viewState.value
+            assertEquals(CaptureMode.IMAGE, restoredState.mode)
+            assertEquals("Restored image caption", restoredState.imageCaption)
+            assertNotNull(restoredState.selectedImageBytes)
+            assertTrue(freshViewModel.isCaptureSheetVisible.value)
+
+            // Clean up draft
+            freshViewModel.clearDraftFromDisk(tempDir)
+            assertFalse(File(tempDir, "capture_draft.json").exists())
+            assertFalse(File(tempDir, "draft_capture_image.jpg").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())

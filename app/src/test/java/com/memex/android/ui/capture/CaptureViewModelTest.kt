@@ -28,6 +28,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.io.InputStream
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CaptureViewModelTest {
@@ -575,6 +577,67 @@ class CaptureViewModelTest {
 
             assertEquals(specialText, freshViewModel.viewState.value.textInput)
             assertTrue(freshViewModel.isCaptureSheetVisible.value)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testSetModeCancelsActiveVoiceRecording() = runTest {
+        val tempAudioFile = java.io.File.createTempFile("test_voice", ".m4a")
+        try {
+            advanceUntilIdle()
+            viewModel.openCaptureSheet(CaptureMode.VOICE)
+            viewModel.startRecording(tempAudioFile)
+            advanceUntilIdle()
+            assertTrue(fakeAudioRecorder.isRecording.value)
+
+            // Switch to Text mode while recording
+            viewModel.setMode(CaptureMode.TEXT)
+            advanceUntilIdle()
+
+            assertFalse(fakeAudioRecorder.isRecording.value)
+            assertFalse(viewModel.viewState.value.isRecording)
+            assertEquals(CaptureMode.TEXT, viewModel.viewState.value.mode)
+        } finally {
+            tempAudioFile.delete()
+        }
+    }
+
+    @Test
+    fun testImageExceedingSizeLimitFailsGracefully() = runTest {
+        val hugeBytes = ByteArray(26 * 1024 * 1024) // 26 MB (over 25MB limit)
+        viewModel.openCaptureSheet(CaptureMode.IMAGE)
+        viewModel.onImageSelected(hugeBytes)
+        advanceUntilIdle()
+
+        val state = viewModel.viewState.value
+        assertFalse(state.isProcessingImage)
+        assertNull(state.selectedImageBytes)
+        assertEquals("Image exceeds maximum allowed size of 25MB", state.errorMessage)
+    }
+
+    @Test
+    fun testSelectingNewImageCleansUpStaleCompressedFiles() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_stale_test").toFile()
+        try {
+            viewModel.setCacheDir(tempDir)
+            viewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            // First image
+            val firstBytes = byteArrayOf(1, 2, 3)
+            viewModel.onImageSelected(firstBytes)
+            advanceUntilIdle()
+            assertTrue(File(tempDir, "draft_capture_image.jpg").exists())
+
+            // Start selecting second image
+            val secondBytes = byteArrayOf(4, 5, 6)
+            viewModel.onImageSelected(secondBytes)
+
+            // Ensure old image files were purged and replaced
+            advanceUntilIdle()
+            assertTrue(File(tempDir, "draft_capture_image.jpg").exists())
+            assertEquals(CaptureMode.IMAGE, viewModel.viewState.value.mode)
         } finally {
             tempDir.deleteRecursively()
         }

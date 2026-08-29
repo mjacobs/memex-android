@@ -20,7 +20,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -119,6 +123,10 @@ class CaptureViewModel(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
+    companion object {
+        private const val MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024L // 25 MB limit
+    }
+
     private val _viewState = MutableStateFlow(CaptureViewState())
     val viewState: StateFlow<CaptureViewState> = _viewState.asStateFlow()
 
@@ -133,6 +141,7 @@ class CaptureViewModel(
     private var cacheDir: File? = null
     private var isRestoredOrInitialized = false
     private val draftJson = Json { ignoreUnknownKeys = true }
+    private val snapshotMutex = Mutex()
 
     init {
         observeRecorderState()
@@ -169,37 +178,52 @@ class CaptureViewModel(
     private fun scheduleDraftSnapshot() {
         val dir = cacheDir ?: return
         viewModelScope.launch(ioDispatcher) {
-            try {
-                val state = _viewState.value
-                val isVisible = _isCaptureSheetVisible.value
-                val sourceFile = File(dir, "draft_source_image.bin")
-                val imageFile = File(dir, "draft_capture_image.jpg")
-                val draftFile = File(dir, "capture_draft.json")
-                val tempFile = File(dir, "capture_draft.tmp")
+            snapshotMutex.withLock {
+                try {
+                    val state = _viewState.value
+                    val isVisible = _isCaptureSheetVisible.value
+                    val sourceFile = File(dir, "draft_source_image.bin")
+                    val imageFile = File(dir, "draft_capture_image.jpg")
+                    val draftFile = File(dir, "capture_draft.json")
+                    val tempFile = File(dir, "capture_draft.tmp")
 
-                if (!isVisible && state.isInitialState()) {
-                    draftFile.delete()
-                    sourceFile.delete()
-                    imageFile.delete()
-                    return@launch
-                }
+                    if (!isVisible && state.isInitialState()) {
+                        draftFile.delete()
+                        sourceFile.delete()
+                        imageFile.delete()
+                        return@withLock
+                    }
 
-                val draft = CaptureDraft(
-                    mode = state.mode.name,
-                    isSheetVisible = isVisible,
-                    textInput = state.textInput,
-                    linkUrl = state.linkUrl,
-                    linkTitle = state.linkTitle,
-                    linkNote = state.linkNote,
-                    imageCaption = state.imageCaption,
-                    hasCompressedImage = imageFile.exists() && state.selectedImageBytes != null,
-                    hasPendingSourceImage = sourceFile.exists() && state.isProcessingImage
-                )
+                    val draft = CaptureDraft(
+                        mode = state.mode.name,
+                        isSheetVisible = isVisible,
+                        textInput = state.textInput,
+                        linkUrl = state.linkUrl,
+                        linkTitle = state.linkTitle,
+                        linkNote = state.linkNote,
+                        imageCaption = state.imageCaption,
+                        hasCompressedImage = imageFile.exists() && state.selectedImageBytes != null,
+                        hasPendingSourceImage = sourceFile.exists() && state.isProcessingImage
+                    )
 
-                val jsonText = draftJson.encodeToString(draft)
-                tempFile.writeText(jsonText)
-                tempFile.renameTo(draftFile)
-            } catch (_: Exception) {}
+                    val jsonText = draftJson.encodeToString(draft)
+                    tempFile.writeText(jsonText)
+                    try {
+                        Files.move(
+                            tempFile.toPath(),
+                            draftFile.toPath(),
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING
+                        )
+                    } catch (_: Exception) {
+                        Files.move(
+                            tempFile.toPath(),
+                            draftFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -211,6 +235,7 @@ class CaptureViewModel(
             val sourceFile = File(cacheDir, "draft_source_image.bin")
             val imageFile = File(cacheDir, "draft_capture_image.jpg")
             val draftFile = File(cacheDir, "capture_draft.json")
+            val tempFile = File(cacheDir, "capture_draft.tmp")
 
             if (!isVisible && state.isInitialState()) {
                 draftFile.delete()
@@ -223,7 +248,7 @@ class CaptureViewModel(
                 imageFile.writeBytes(state.selectedImageBytes)
                 true
             } else {
-                imageFile.exists()
+                false
             }
 
             val draft = CaptureDraft(
@@ -238,7 +263,16 @@ class CaptureViewModel(
                 hasPendingSourceImage = sourceFile.exists() && state.isProcessingImage
             )
 
-            draftFile.writeText(draftJson.encodeToString(draft))
+            tempFile.writeText(draftJson.encodeToString(draft))
+            try {
+                Files.move(
+                    tempFile.toPath(),
+                    draftFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: Exception) {
+                tempFile.renameTo(draftFile)
+            }
         } catch (_: Exception) {}
     }
 
@@ -336,6 +370,9 @@ class CaptureViewModel(
     }
 
     fun setMode(mode: CaptureMode) {
+        if (mode != CaptureMode.VOICE && _viewState.value.isRecording) {
+            cancelRecording()
+        }
         isRestoredOrInitialized = true
         _viewState.update { it.copy(mode = mode, errorMessage = null) }
         scheduleDraftSnapshot()
@@ -419,6 +456,28 @@ class CaptureViewModel(
     fun onImageSelected(bytes: ByteArray) {
         isRestoredOrInitialized = true
         compressionJob?.cancel()
+
+        val dir = cacheDir
+        if (dir != null) {
+            try {
+                File(dir, "draft_capture_image.jpg").delete()
+                File(dir, "draft_source_image.bin").delete()
+            } catch (_: Exception) {}
+        }
+
+        if (bytes.size > MAX_IMAGE_SOURCE_BYTES) {
+            _viewState.update {
+                it.copy(
+                    isProcessingImage = false,
+                    selectedImageBytes = null,
+                    selectedImageBase64 = null,
+                    errorMessage = "Image exceeds maximum allowed size of 25MB"
+                )
+            }
+            scheduleDraftSnapshot()
+            return
+        }
+
         _viewState.update {
             it.copy(
                 isProcessingImage = true,
@@ -427,7 +486,7 @@ class CaptureViewModel(
                 errorMessage = null
             )
         }
-        val dir = cacheDir
+
         if (dir != null) {
             try { File(dir, "draft_source_image.bin").writeBytes(bytes) } catch (_: Exception) {}
         }
@@ -467,6 +526,16 @@ class CaptureViewModel(
     fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
         isRestoredOrInitialized = true
         compressionJob?.cancel()
+
+        val dir = cacheDir
+        if (dir != null) {
+            try {
+                File(dir, "draft_capture_image.jpg").delete()
+                File(dir, "draft_source_image.bin").delete()
+                File(dir, "draft_source_image.tmp").delete()
+            } catch (_: Exception) {}
+        }
+
         _viewState.update {
             it.copy(
                 isProcessingImage = true,
@@ -478,17 +547,41 @@ class CaptureViewModel(
         scheduleDraftSnapshot()
 
         compressionJob = viewModelScope.launch(ioDispatcher) {
+            val sourceFile = dir?.let { File(it, "draft_source_image.bin") }
+            val tempFile = dir?.let { File(it, "draft_source_image.tmp") }
             try {
-                val dir = cacheDir
-                val sourceFile = dir?.let { File(it, "draft_source_image.bin") }
-                if (sourceFile != null) {
-                    try {
-                        contentResolver.openInputStream(uri)?.use { input ->
-                            sourceFile.outputStream().use { output ->
-                                input.copyTo(output)
+                if (tempFile != null) {
+                    var totalCopied = 0L
+                    val buffer = ByteArray(8192)
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        tempFile.outputStream().use { output ->
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read == -1) break
+                                totalCopied += read
+                                if (totalCopied > MAX_IMAGE_SOURCE_BYTES) {
+                                    throw IllegalStateException("Image exceeds maximum allowed size of 25MB")
+                                }
+                                output.write(buffer, 0, read)
                             }
                         }
-                    } catch (_: Exception) {}
+                    }
+                    if (sourceFile != null) {
+                        try {
+                            Files.move(
+                                tempFile.toPath(),
+                                sourceFile.toPath(),
+                                StandardCopyOption.ATOMIC_MOVE,
+                                StandardCopyOption.REPLACE_EXISTING
+                            )
+                        } catch (_: Exception) {
+                            Files.move(
+                                tempFile.toPath(),
+                                sourceFile.toPath(),
+                                StandardCopyOption.REPLACE_EXISTING
+                            )
+                        }
+                    }
                 }
                 scheduleDraftSnapshot()
 
@@ -514,8 +607,11 @@ class CaptureViewModel(
                 }
                 scheduleDraftSnapshot()
             } catch (e: CancellationException) {
+                tempFile?.delete()
                 throw e
             } catch (e: Exception) {
+                tempFile?.delete()
+                sourceFile?.delete()
                 _viewState.update {
                     it.copy(
                         isProcessingImage = false,

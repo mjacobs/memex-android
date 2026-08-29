@@ -199,9 +199,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        captureViewModel.setCacheDir(cacheDir)
+
         if (savedInstanceState != null) {
             isShareHandled = savedInstanceState.getBoolean(KEY_SHARE_HANDLED, false)
-            if (savedInstanceState.getBoolean(KEY_HAS_DRAFT, false)) {
+            if (savedInstanceState.getBoolean(KEY_HAS_DRAFT, false) && captureViewModel.needsRestoration()) {
                 captureViewModel.restoreDraftFromDisk(cacheDir)
             }
         } else {
@@ -228,11 +230,7 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHARE_HANDLED, isShareHandled)
-        val hasDraft = captureViewModel.isCaptureSheetVisible.value
-        outState.putBoolean(KEY_HAS_DRAFT, hasDraft)
-        if (hasDraft) {
-            captureViewModel.saveDraftToDisk(cacheDir)
-        }
+        outState.putBoolean(KEY_HAS_DRAFT, captureViewModel.isCaptureSheetVisible.value)
     }
 
     override fun onNewIntent(intent: Intent) {

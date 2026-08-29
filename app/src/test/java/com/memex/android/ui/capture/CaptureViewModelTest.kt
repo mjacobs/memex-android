@@ -763,10 +763,9 @@ class CaptureViewModelTest {
             // Release first compressor
             pauseLatch.countDown()
 
-            kotlinx.coroutines.withTimeout(5000) {
-                while (controlledViewModel.viewState.value.isProcessingImage) {
-                    kotlinx.coroutines.delay(50)
-                }
+            val deadline = System.currentTimeMillis() + 5000
+            while (File(tempDir, "draft_source_image_1.bin").exists() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
             }
 
             val state = controlledViewModel.viewState.value
@@ -933,6 +932,72 @@ class CaptureViewModelTest {
             assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
             assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
             assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testOlderSnapshotCommitDoesNotPurgeNewerGenerationFilesInFlight() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_gen_purge_race_test").toFile()
+        try {
+            val pauseLatch = java.util.concurrent.CountDownLatch(1)
+            val firstCompressingLatch = java.util.concurrent.CountDownLatch(1)
+            var isFirst = true
+            val controlledCompressor = object : FakeImageCompressor() {
+                override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage {
+                    val first = synchronized(this) {
+                        if (isFirst) {
+                            isFirst = false
+                            true
+                        } else false
+                    }
+                    if (first) {
+                        firstCompressingLatch.countDown()
+                        pauseLatch.await()
+                    }
+                    return CompressedImage(bytes = imageBytes, base64 = "base64-test")
+                }
+            }
+
+            val controlledViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = null,
+                imageCompressor = controlledCompressor,
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default
+            )
+            controlledViewModel.setCacheDir(tempDir)
+            controlledViewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            // Start selection 1 (generation 1)
+            controlledViewModel.onImageSelected(byteArrayOf(1, 1, 1))
+
+            firstCompressingLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+
+            // Start selection 2 (generation 2) creating gen 2 source file
+            controlledViewModel.onImageSelected(byteArrayOf(2, 2, 2))
+
+            // Create an in-flight .tmp file for generation 2 as well
+            val gen2Tmp = File(tempDir, "draft_source_image_2.tmp")
+            gen2Tmp.writeBytes(byteArrayOf(2, 2, 2, 2))
+
+            // Unpause generation 1
+            pauseLatch.countDown()
+
+            val deadline = System.currentTimeMillis() + 5000
+            while (controlledViewModel.viewState.value.isProcessingImage && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+
+            // Verify generation 2 files (source, tmp, and compressed) were NOT purged by gen 1 commit
+            assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
+            assertTrue(gen2Tmp.exists())
+            assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
+
+            // And generation 1 files are purged
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+            assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
         } finally {
             tempDir.deleteRecursively()
         }

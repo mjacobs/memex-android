@@ -19,6 +19,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -628,16 +629,20 @@ class CaptureViewModelTest {
             val firstBytes = byteArrayOf(1, 2, 3)
             viewModel.onImageSelected(firstBytes)
             advanceUntilIdle()
-            assertTrue(File(tempDir, "draft_capture_image.jpg").exists())
+            val firstState = viewModel.viewState.value
+            assertEquals("draft_capture_image_1.jpg", firstState.imageFileName)
+            assertTrue(File(tempDir, "draft_capture_image_1.jpg").exists())
 
             // Start selecting second image
             val secondBytes = byteArrayOf(4, 5, 6)
             viewModel.onImageSelected(secondBytes)
 
-            // Ensure old image files were purged and replaced
             advanceUntilIdle()
-            assertTrue(File(tempDir, "draft_capture_image.jpg").exists())
-            assertEquals(CaptureMode.IMAGE, viewModel.viewState.value.mode)
+            val secondState = viewModel.viewState.value
+            assertEquals("draft_capture_image_2.jpg", secondState.imageFileName)
+            assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
+            assertArrayEquals(byteArrayOf(4, 5, 6), secondState.selectedImageBytes)
+            assertEquals(CaptureMode.IMAGE, secondState.mode)
         } finally {
             tempDir.deleteRecursively()
         }
@@ -665,6 +670,101 @@ class CaptureViewModelTest {
             assertEquals(3, state.selectedImageBytes?.size)
             assertEquals(2.toByte(), state.selectedImageBytes?.get(0))
         } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testProcessDeathDuringByteArrayCompressionResumesFromPersistedSource() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_byte_resume_test").toFile()
+        try {
+            val sourceBytes = byteArrayOf(10, 20, 30, 40)
+            File(tempDir, "draft_source_image_1.bin").writeBytes(sourceBytes)
+
+            val draft = CaptureDraft(
+                mode = "IMAGE",
+                isSheetVisible = true,
+                imageCaption = "Resumed byte caption",
+                hasCompressedImage = false,
+                hasPendingSourceImage = true,
+                sourceFileName = "draft_source_image_1.bin",
+                generation = 1L
+            )
+            File(tempDir, "capture_draft.json").writeText(kotlinx.serialization.json.Json.encodeToString(draft))
+
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            freshViewModel.restoreDraftFromDisk(tempDir)
+            advanceUntilIdle()
+
+            val state = freshViewModel.viewState.value
+            assertEquals(CaptureMode.IMAGE, state.mode)
+            assertEquals("Resumed byte caption", state.imageCaption)
+            assertFalse(state.isProcessingImage)
+            assertNotNull(state.selectedImageBytes)
+            assertArrayEquals(sourceBytes, state.selectedImageBytes)
+            assertTrue(File(tempDir, "draft_capture_image_1.jpg").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testProcessDeathDuringNewUriSelectionDoesNotRestoreStaleSourceFile() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_stale_source_test").toFile()
+        try {
+            // Stale source file from previous image A (gen 1)
+            val staleBytes = byteArrayOf(1, 1, 1)
+            File(tempDir, "draft_source_image_1.bin").writeBytes(staleBytes)
+
+            // Draft saved during URI selection for image B (gen 2)
+            val draft = CaptureDraft(
+                mode = "IMAGE",
+                isSheetVisible = true,
+                imageCaption = "New image B",
+                hasCompressedImage = false,
+                hasPendingSourceImage = true,
+                pendingSourceUri = "content://com.memex.test/image_b.jpg",
+                generation = 2L
+            )
+            File(tempDir, "capture_draft.json").writeText(kotlinx.serialization.json.Json.encodeToString(draft))
+
+            io.mockk.mockkStatic(android.net.Uri::class)
+            val mockUri = io.mockk.mockk<android.net.Uri>()
+            io.mockk.every { android.net.Uri.parse("content://com.memex.test/image_b.jpg") } returns mockUri
+            io.mockk.every { mockUri.toString() } returns "content://com.memex.test/image_b.jpg"
+
+            val mockContentResolver = io.mockk.mockk<android.content.ContentResolver>()
+            val imageBBytes = byteArrayOf(99, 88, 77)
+            io.mockk.every {
+                mockContentResolver.openInputStream(mockUri)
+            } answers { imageBBytes.inputStream() }
+
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            freshViewModel.restoreDraftFromDisk(tempDir, mockContentResolver)
+            advanceUntilIdle()
+
+            val state = freshViewModel.viewState.value
+            assertEquals(CaptureMode.IMAGE, state.mode)
+            assertEquals("New image B", state.imageCaption)
+            assertFalse(state.isProcessingImage)
+            assertNotNull(state.selectedImageBytes)
+            assertArrayEquals(imageBBytes, state.selectedImageBytes)
+        } finally {
+            io.mockk.unmockkStatic(android.net.Uri::class)
             tempDir.deleteRecursively()
         }
     }

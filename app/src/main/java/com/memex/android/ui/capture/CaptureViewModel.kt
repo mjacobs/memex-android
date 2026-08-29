@@ -45,7 +45,10 @@ data class CaptureDraft(
     val imageCaption: String = "",
     val hasCompressedImage: Boolean = false,
     val hasPendingSourceImage: Boolean = false,
-    val pendingSourceUri: String? = null
+    val pendingSourceUri: String? = null,
+    val sourceFileName: String? = null,
+    val imageFileName: String? = null,
+    val generation: Long = 0L
 )
 
 /**
@@ -82,6 +85,9 @@ data class CaptureViewState(
     val selectedImageBytes: ByteArray? = null,
     val selectedImageBase64: String? = null,
     val pendingSourceUri: String? = null,
+    val sourceFileName: String? = null,
+    val imageFileName: String? = null,
+    val generation: Long = 0L,
     val isProcessingImage: Boolean = false,
     val isRecording: Boolean = false,
     val recordingDurationSeconds: Long = 0L,
@@ -111,6 +117,8 @@ data class CaptureViewState(
         selectedImageBytes == null &&
         selectedImageBase64 == null &&
         pendingSourceUri == null &&
+        sourceFileName == null &&
+        imageFileName == null &&
         !isProcessingImage &&
         !isRecording &&
         uiState is CaptureUiState.Idle
@@ -187,17 +195,21 @@ class CaptureViewModel(
                 try {
                     val state = _viewState.value
                     val isVisible = _isCaptureSheetVisible.value
-                    val sourceFile = File(dir, "draft_source_image.bin")
-                    val imageFile = File(dir, "draft_capture_image.jpg")
                     val draftFile = File(dir, "capture_draft.json")
                     val tempFile = File(dir, "capture_draft.tmp")
 
                     if (!isVisible && state.isInitialState()) {
                         draftFile.delete()
-                        sourceFile.delete()
-                        imageFile.delete()
+                        state.sourceFileName?.let { File(dir, it).delete() }
+                        state.imageFileName?.let { File(dir, it).delete() }
                         return@withLock
                     }
+
+                    val sourceFile = state.sourceFileName?.let { File(dir, it) }
+                    val imageFile = state.imageFileName?.let { File(dir, it) }
+
+                    val hasCompressed = imageFile?.exists() == true && state.selectedImageBytes != null
+                    val hasPending = ((sourceFile?.exists() == true) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
 
                     val draft = CaptureDraft(
                         mode = state.mode.name,
@@ -207,9 +219,12 @@ class CaptureViewModel(
                         linkTitle = state.linkTitle,
                         linkNote = state.linkNote,
                         imageCaption = state.imageCaption,
-                        hasCompressedImage = imageFile.exists() && state.selectedImageBytes != null,
-                        hasPendingSourceImage = (sourceFile.exists() || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage,
-                        pendingSourceUri = state.pendingSourceUri
+                        hasCompressedImage = hasCompressed,
+                        hasPendingSourceImage = hasPending,
+                        pendingSourceUri = state.pendingSourceUri,
+                        sourceFileName = state.sourceFileName,
+                        imageFileName = state.imageFileName,
+                        generation = state.generation
                     )
 
                     val jsonText = draftJson.encodeToString(draft)
@@ -238,24 +253,30 @@ class CaptureViewModel(
         try {
             val state = _viewState.value
             val isVisible = _isCaptureSheetVisible.value
-            val sourceFile = File(cacheDir, "draft_source_image.bin")
-            val imageFile = File(cacheDir, "draft_capture_image.jpg")
             val draftFile = File(cacheDir, "capture_draft.json")
             val tempFile = File(cacheDir, "capture_draft.tmp")
 
             if (!isVisible && state.isInitialState()) {
                 draftFile.delete()
-                sourceFile.delete()
-                imageFile.delete()
+                state.sourceFileName?.let { File(cacheDir, it).delete() }
+                state.imageFileName?.let { File(cacheDir, it).delete() }
                 return
             }
+
+            val gen = if (state.generation > 0L) state.generation else 1L
+            val imageName = state.imageFileName ?: "draft_capture_image_$gen.jpg"
+            val imageFile = File(cacheDir, imageName)
+            val sourceName = state.sourceFileName ?: "draft_source_image_$gen.bin"
+            val sourceFile = File(cacheDir, sourceName)
 
             val hasCompressed = if (state.selectedImageBytes != null && state.selectedImageBytes.isNotEmpty()) {
                 imageFile.writeBytes(state.selectedImageBytes)
                 true
             } else {
-                false
+                imageFile.exists()
             }
+
+            val hasPending = ((sourceFile.exists()) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
 
             val draft = CaptureDraft(
                 mode = state.mode.name,
@@ -266,8 +287,11 @@ class CaptureViewModel(
                 linkNote = state.linkNote,
                 imageCaption = state.imageCaption,
                 hasCompressedImage = hasCompressed,
-                hasPendingSourceImage = (sourceFile.exists() || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage,
-                pendingSourceUri = state.pendingSourceUri
+                hasPendingSourceImage = hasPending,
+                pendingSourceUri = state.pendingSourceUri,
+                sourceFileName = if (sourceFile.exists()) sourceName else null,
+                imageFileName = if (hasCompressed) imageName else null,
+                generation = gen
             )
 
             tempFile.writeText(draftJson.encodeToString(draft))
@@ -292,8 +316,11 @@ class CaptureViewModel(
             val draft = draftJson.decodeFromString<CaptureDraft>(draftFile.readText())
             val restoredMode = try { CaptureMode.valueOf(draft.mode) } catch (_: Exception) { CaptureMode.TEXT }
 
-            val imageFile = File(dir, "draft_capture_image.jpg")
-            val sourceFile = File(dir, "draft_source_image.bin")
+            val generation = if (draft.generation > 0L) draft.generation else 1L
+            currentImageGeneration = generation
+
+            val imageFile = draft.imageFileName?.let { File(dir, it) } ?: File(dir, "draft_capture_image.jpg")
+            val sourceFile = draft.sourceFileName?.let { File(dir, it) } ?: File(dir, "draft_source_image.bin")
 
             var restoredBytes: ByteArray? = null
             var restoredBase64: String? = null
@@ -328,6 +355,9 @@ class CaptureViewModel(
                     selectedImageBytes = restoredBytes,
                     selectedImageBase64 = restoredBase64,
                     pendingSourceUri = draft.pendingSourceUri,
+                    sourceFileName = if (sourceFile.exists()) sourceFile.name else draft.sourceFileName,
+                    imageFileName = if (imageFile.exists()) imageFile.name else draft.imageFileName,
+                    generation = generation,
                     isProcessingImage = needsImageResume,
                     errorMessage = null
                 )
@@ -337,7 +367,7 @@ class CaptureViewModel(
 
             if (needsImageResume) {
                 if (sourceFile.exists()) {
-                    resumeImageCompression(dir, sourceFile)
+                    resumeImageCompression(dir, sourceFile, generation)
                 } else if (resumeUri != null && contentResolver != null) {
                     onImageUriSelected(contentResolver, resumeUri)
                 }
@@ -345,31 +375,50 @@ class CaptureViewModel(
         } catch (_: Exception) {}
     }
 
-    private fun resumeImageCompression(dir: File, sourceFile: File) {
+    private fun resumeImageCompression(dir: File, sourceFile: File, generation: Long) {
         compressionJob?.cancel()
+        val imageName = "draft_capture_image_$generation.jpg"
+        val imageFile = File(dir, imageName)
+
         compressionJob = viewModelScope.launch(ioDispatcher) {
             try {
+                ensureActive()
                 val compressed = imageCompressor.compressStream(openStream = { sourceFile.inputStream() })
-                File(dir, "draft_capture_image.jpg").writeBytes(compressed.bytes)
-                _viewState.update {
-                    it.copy(
-                        isProcessingImage = false,
-                        selectedImageBytes = compressed.bytes,
-                        selectedImageBase64 = compressed.base64,
-                        errorMessage = null
-                    )
+                ensureActive()
+                imageFile.writeBytes(compressed.bytes)
+
+                snapshotMutex.withLock {
+                    if (generation == currentImageGeneration) {
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                selectedImageBytes = compressed.bytes,
+                                selectedImageBase64 = compressed.base64,
+                                imageFileName = imageName,
+                                errorMessage = null
+                            )
+                        }
+                        scheduleDraftSnapshot()
+                    } else {
+                        imageFile.delete()
+                    }
                 }
-                scheduleDraftSnapshot()
             } catch (e: CancellationException) {
+                imageFile.delete()
                 throw e
             } catch (e: Exception) {
-                _viewState.update {
-                    it.copy(
-                        isProcessingImage = false,
-                        errorMessage = "Failed to process image: ${e.message}"
-                    )
+                imageFile.delete()
+                snapshotMutex.withLock {
+                    if (generation == currentImageGeneration) {
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                errorMessage = "Failed to process image: ${e.message}"
+                            )
+                        }
+                        scheduleDraftSnapshot()
+                    }
                 }
-                scheduleDraftSnapshot()
             }
         }
     }
@@ -377,8 +426,9 @@ class CaptureViewModel(
     fun clearDraftFromDisk(cacheDir: File) {
         try {
             File(cacheDir, "capture_draft.json").delete()
-            File(cacheDir, "draft_source_image.bin").delete()
-            File(cacheDir, "draft_capture_image.jpg").delete()
+            cacheDir.listFiles { file ->
+                file.name.startsWith("draft_source_image") || file.name.startsWith("draft_capture_image")
+            }?.forEach { it.delete() }
         } catch (_: Exception) {}
     }
 
@@ -478,14 +528,6 @@ class CaptureViewModel(
         isRestoredOrInitialized = true
         compressionJob?.cancel()
 
-        val dir = cacheDir
-        if (dir != null) {
-            try {
-                File(dir, "draft_capture_image.jpg").delete()
-                File(dir, "draft_source_image.bin").delete()
-            } catch (_: Exception) {}
-        }
-
         if (bytes.size > MAX_IMAGE_SOURCE_BYTES) {
             _viewState.update {
                 it.copy(
@@ -500,80 +542,79 @@ class CaptureViewModel(
             return
         }
 
+        val dir = cacheDir
+        val sourceName = "draft_source_image_$generation.bin"
+        val imageName = "draft_capture_image_$generation.jpg"
+        val genSourceFile = dir?.let { File(it, sourceName) }
+        val genImageFile = dir?.let { File(it, imageName) }
+
+        if (genSourceFile != null) {
+            try { genSourceFile.writeBytes(bytes) } catch (_: Exception) {}
+        }
+
         _viewState.update {
             it.copy(
                 isProcessingImage = true,
                 selectedImageBytes = null,
                 selectedImageBase64 = null,
                 pendingSourceUri = null,
+                sourceFileName = sourceName,
+                imageFileName = null,
+                generation = generation,
                 errorMessage = null
             )
-        }
-
-        val genSourceFile = dir?.let { File(it, "draft_source_image_$generation.bin") }
-        if (genSourceFile != null) {
-            try { genSourceFile.writeBytes(bytes) } catch (_: Exception) {}
         }
         scheduleDraftSnapshot()
 
         compressionJob = viewModelScope.launch(ioDispatcher) {
             try {
                 ensureActive()
-                if (generation != currentImageGeneration) {
-                    genSourceFile?.delete()
-                    return@launch
-                }
-
                 val compressed = withContext(defaultDispatcher) {
                     imageCompressor.compress(bytes)
                 }
 
                 ensureActive()
-                if (generation != currentImageGeneration) {
-                    genSourceFile?.delete()
-                    return@launch
+                genImageFile?.let {
+                    try { it.writeBytes(compressed.bytes) } catch (_: Exception) {}
                 }
 
-                dir?.let {
-                    val finalSourceFile = File(it, "draft_source_image.bin")
-                    val finalImageFile = File(it, "draft_capture_image.jpg")
-                    if (genSourceFile != null && genSourceFile.exists()) {
-                        try {
-                            Files.move(genSourceFile.toPath(), finalSourceFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                        } catch (_: Exception) {
-                            genSourceFile.renameTo(finalSourceFile)
-                        }
-                    }
-                    try { finalImageFile.writeBytes(compressed.bytes) } catch (_: Exception) {}
-                }
-
-                _viewState.update {
+                snapshotMutex.withLock {
                     if (generation == currentImageGeneration) {
-                        it.copy(
-                            isProcessingImage = false,
-                            selectedImageBytes = compressed.bytes,
-                            selectedImageBase64 = compressed.base64,
-                            pendingSourceUri = null,
-                            errorMessage = null
-                        )
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                selectedImageBytes = compressed.bytes,
+                                selectedImageBase64 = compressed.base64,
+                                pendingSourceUri = null,
+                                sourceFileName = sourceName,
+                                imageFileName = imageName,
+                                generation = generation,
+                                errorMessage = null
+                            )
+                        }
+                        scheduleDraftSnapshot()
                     } else {
-                        it
+                        genSourceFile?.delete()
+                        genImageFile?.delete()
                     }
                 }
-                scheduleDraftSnapshot()
             } catch (e: CancellationException) {
                 genSourceFile?.delete()
+                genImageFile?.delete()
                 throw e
             } catch (e: Exception) {
                 genSourceFile?.delete()
-                if (generation == currentImageGeneration) {
-                    _viewState.update {
-                        it.copy(
-                            isProcessingImage = false,
-                            errorMessage = "Failed to process image: ${e.message}"
-                        )
+                genImageFile?.delete()
+                snapshotMutex.withLock {
+                    if (generation == currentImageGeneration) {
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                errorMessage = "Failed to process image: ${e.message}"
+                            )
+                        }
+                        scheduleDraftSnapshot()
                     }
-                    scheduleDraftSnapshot()
                 }
             }
         }
@@ -585,22 +626,28 @@ class CaptureViewModel(
         compressionJob?.cancel()
 
         val dir = cacheDir
+        val sourceName = "draft_source_image_$generation.bin"
+        val imageName = "draft_capture_image_$generation.jpg"
+        val tempName = "draft_source_image_$generation.tmp"
+
         _viewState.update {
             it.copy(
                 isProcessingImage = true,
                 selectedImageBytes = null,
                 selectedImageBase64 = null,
                 pendingSourceUri = uri.toString(),
+                sourceFileName = null,
+                imageFileName = null,
+                generation = generation,
                 errorMessage = null
             )
         }
         scheduleDraftSnapshot()
 
         compressionJob = viewModelScope.launch(ioDispatcher) {
-            val tempFile = dir?.let { File(it, "draft_source_image_$generation.tmp") }
-            val genSourceFile = dir?.let { File(it, "draft_source_image_$generation.bin") }
-            val finalSourceFile = dir?.let { File(it, "draft_source_image.bin") }
-            val finalImageFile = dir?.let { File(it, "draft_capture_image.jpg") }
+            val tempFile = dir?.let { File(it, tempName) }
+            val genSourceFile = dir?.let { File(it, sourceName) }
+            val genImageFile = dir?.let { File(it, imageName) }
 
             try {
                 if (tempFile != null) {
@@ -642,10 +689,18 @@ class CaptureViewModel(
                     }
                 }
 
-                ensureActive()
-                if (generation != currentImageGeneration) {
-                    genSourceFile?.delete()
-                    return@launch
+                snapshotMutex.withLock {
+                    if (generation != currentImageGeneration) {
+                        genSourceFile?.delete()
+                        return@launch
+                    }
+                    _viewState.update {
+                        it.copy(
+                            sourceFileName = sourceName,
+                            pendingSourceUri = null
+                        )
+                    }
+                    scheduleDraftSnapshot()
                 }
 
                 val compressed = imageCompressor.compressStream(openStream = {
@@ -657,56 +712,49 @@ class CaptureViewModel(
                 })
 
                 ensureActive()
-                if (generation != currentImageGeneration) {
-                    genSourceFile?.delete()
-                    return@launch
-                }
-
-                if (genSourceFile != null && finalSourceFile != null && genSourceFile.exists()) {
-                    try {
-                        Files.move(
-                            genSourceFile.toPath(),
-                            finalSourceFile.toPath(),
-                            StandardCopyOption.REPLACE_EXISTING
-                        )
-                    } catch (_: Exception) {
-                        genSourceFile.renameTo(finalSourceFile)
-                    }
-                }
-
-                finalImageFile?.let {
+                genImageFile?.let {
                     try { it.writeBytes(compressed.bytes) } catch (_: Exception) {}
                 }
 
-                _viewState.update {
+                snapshotMutex.withLock {
                     if (generation == currentImageGeneration) {
-                        it.copy(
-                            isProcessingImage = false,
-                            selectedImageBytes = compressed.bytes,
-                            selectedImageBase64 = compressed.base64,
-                            pendingSourceUri = null,
-                            errorMessage = null
-                        )
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                selectedImageBytes = compressed.bytes,
+                                selectedImageBase64 = compressed.base64,
+                                pendingSourceUri = null,
+                                sourceFileName = sourceName,
+                                imageFileName = imageName,
+                                generation = generation,
+                                errorMessage = null
+                            )
+                        }
+                        scheduleDraftSnapshot()
                     } else {
-                        it
+                        genSourceFile?.delete()
+                        genImageFile?.delete()
                     }
                 }
-                scheduleDraftSnapshot()
             } catch (e: CancellationException) {
                 tempFile?.delete()
                 genSourceFile?.delete()
+                genImageFile?.delete()
                 throw e
             } catch (e: Exception) {
                 tempFile?.delete()
                 genSourceFile?.delete()
-                if (generation == currentImageGeneration) {
-                    _viewState.update {
-                        it.copy(
-                            isProcessingImage = false,
-                            errorMessage = "Failed to process image: ${e.message}"
-                        )
+                genImageFile?.delete()
+                snapshotMutex.withLock {
+                    if (generation == currentImageGeneration) {
+                        _viewState.update {
+                            it.copy(
+                                isProcessingImage = false,
+                                errorMessage = "Failed to process image: ${e.message}"
+                            )
+                        }
+                        scheduleDraftSnapshot()
                     }
-                    scheduleDraftSnapshot()
                 }
             }
         }

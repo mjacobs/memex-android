@@ -149,12 +149,18 @@ class CaptureViewModel(
     private var submissionJob: Job? = null
     private var compressionJob: Job? = null
     private var activeRecordedAudioFile: File? = null
-
     private var cacheDir: File? = null
     private var isRestoredOrInitialized = false
     private var currentImageGeneration: Long = 0L
     private val draftJson = Json { ignoreUnknownKeys = true }
     private val snapshotMutex = Mutex()
+    private val activeBackgroundJobs = java.util.concurrent.ConcurrentHashMap.newKeySet<Job>()
+
+    private fun trackJob(job: Job): Job {
+        activeBackgroundJobs.add(job)
+        job.invokeOnCompletion { activeBackgroundJobs.remove(job) }
+        return job
+    }
 
     init {
         observeRecorderState()
@@ -260,20 +266,24 @@ class CaptureViewModel(
     }
 
     internal suspend fun awaitCompressionIdle() {
-        compressionJob?.join()
+        while (true) {
+            val jobs = activeBackgroundJobs.toList()
+            if (jobs.isEmpty()) break
+            jobs.forEach { it.join() }
+        }
         snapshotMutex.withLock { }
     }
 
     private fun scheduleDraftSnapshot() {
         val dir = cacheDir ?: return
-        viewModelScope.launch(ioDispatcher) {
+        trackJob(viewModelScope.launch(ioDispatcher) {
             snapshotMutex.withLock {
                 val (state, isVisible) = synchronized(this@CaptureViewModel) {
                     _viewState.value to _isCaptureSheetVisible.value
                 }
                 commitDraftSnapshotLocked(dir, state, isVisible)
             }
-        }
+        })
     }
 
     fun saveDraftToDisk(cacheDir: File) {
@@ -436,7 +446,7 @@ class CaptureViewModel(
         val imageName = "draft_capture_image_$generation.jpg"
         val imageFile = File(dir, imageName)
 
-        compressionJob = viewModelScope.launch(ioDispatcher) {
+        compressionJob = trackJob(viewModelScope.launch(ioDispatcher) {
             try {
                 ensureActive()
                 val compressed = imageCompressor.compressStream(openStream = { sourceFile.inputStream() })
@@ -505,7 +515,7 @@ class CaptureViewModel(
                     }
                 }
             }
-        }
+        })
     }
 
     fun clearDraftFromDisk(cacheDir: File) {
@@ -637,7 +647,7 @@ class CaptureViewModel(
                 }
             }
             if (dir != null && committedState != null) {
-                viewModelScope.launch(ioDispatcher) {
+                trackJob(viewModelScope.launch(ioDispatcher) {
                     snapshotMutex.withLock {
                         val stateToCommit = if (committedState.generation == synchronized(this@CaptureViewModel) { currentImageGeneration }) {
                             committedState
@@ -648,7 +658,7 @@ class CaptureViewModel(
                             commitDraftSnapshotLocked(dir, stateToCommit, _isCaptureSheetVisible.value)
                         }
                     }
-                }
+                })
             }
             return
         }
@@ -689,7 +699,7 @@ class CaptureViewModel(
         }
         scheduleDraftSnapshot()
 
-        compressionJob = viewModelScope.launch(ioDispatcher) {
+        compressionJob = trackJob(viewModelScope.launch(ioDispatcher) {
             try {
                 ensureActive()
                 val compressed = withContext(defaultDispatcher) {
@@ -770,7 +780,7 @@ class CaptureViewModel(
                     }
                 }
             }
-        }
+        })
     }
 
     fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
@@ -808,7 +818,7 @@ class CaptureViewModel(
         }
         scheduleDraftSnapshot()
 
-        compressionJob = viewModelScope.launch(ioDispatcher) {
+        compressionJob = trackJob(viewModelScope.launch(ioDispatcher) {
             val tempFile = dir?.let { File(it, tempName) }
             val genSourceFile = dir?.let { File(it, sourceName) }
             val genImageFile = dir?.let { File(it, imageName) }
@@ -975,7 +985,7 @@ class CaptureViewModel(
                     }
                 }
             }
-        }
+        })
     }
 
     fun startRecording(outputFile: File) {

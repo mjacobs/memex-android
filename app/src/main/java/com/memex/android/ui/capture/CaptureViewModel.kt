@@ -193,10 +193,17 @@ class CaptureViewModel(
             val draftFile = File(dir, "capture_draft.json")
             val tempFile = File(dir, "capture_draft.tmp")
 
+            val isTerminal = !state.isProcessingImage
             if (!isVisible && state.isInitialState()) {
                 val deleted = if (draftFile.exists()) draftFile.delete() else true
                 if (deleted) {
-                    purgeOlderGenerationFiles(dir, currentCommittedGen = state.generation, keepSource = null, keepImage = null)
+                    purgeOlderGenerationFiles(
+                        dir,
+                        currentCommittedGen = state.generation,
+                        isTerminal = isTerminal,
+                        keepSource = null,
+                        keepImage = null
+                    )
                 }
                 return deleted
             }
@@ -239,7 +246,13 @@ class CaptureViewModel(
                     StandardCopyOption.REPLACE_EXISTING
                 )
             }
-            purgeOlderGenerationFiles(dir, currentCommittedGen = state.generation, keepSource = state.sourceFileName, keepImage = state.imageFileName)
+            purgeOlderGenerationFiles(
+                dir,
+                currentCommittedGen = state.generation,
+                isTerminal = isTerminal,
+                keepSource = state.sourceFileName,
+                keepImage = state.imageFileName
+            )
             true
         } catch (_: Exception) {
             false
@@ -385,7 +398,13 @@ class CaptureViewModel(
         } catch (_: Exception) {}
     }
 
-    private fun purgeOlderGenerationFiles(dir: File, currentCommittedGen: Long, keepSource: String? = null, keepImage: String? = null) {
+    private fun purgeOlderGenerationFiles(
+        dir: File,
+        currentCommittedGen: Long,
+        isTerminal: Boolean,
+        keepSource: String? = null,
+        keepImage: String? = null
+    ) {
         val maxKnownGen = synchronized(this) { currentImageGeneration }
         val regex = Regex("""draft_(?:source|capture)_image_(\d+)\.(?:bin|jpg|tmp)""")
         try {
@@ -395,8 +414,12 @@ class CaptureViewModel(
                 val match = regex.matchEntire(name)
                 if (match != null) {
                     val fileGen = match.groupValues[1].toLongOrNull()
-                    if (fileGen != null && fileGen < currentCommittedGen && fileGen < maxKnownGen) {
-                        file.delete()
+                    if (fileGen != null) {
+                        if (fileGen < currentCommittedGen && fileGen < maxKnownGen) {
+                            file.delete()
+                        } else if (fileGen == currentCommittedGen && isTerminal && fileGen <= maxKnownGen) {
+                            file.delete()
+                        }
                     }
                 }
             }
@@ -418,6 +441,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -448,6 +476,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -576,26 +609,29 @@ class CaptureViewModel(
 
         val dir = cacheDir
         if (bytes.size > MAX_IMAGE_SOURCE_BYTES) {
-            val generation = synchronized(this) { ++currentImageGeneration }
             var committedState: CaptureViewState? = null
-            while (true) {
-                val prev = _viewState.value
-                val next = prev.copy(
-                    isProcessingImage = false,
-                    selectedImageBytes = null,
-                    selectedImageBase64 = null,
-                    pendingSourceUri = null,
-                    sourceFileName = null,
-                    imageFileName = null,
-                    generation = generation,
-                    errorMessage = "Image exceeds maximum allowed size of 25MB"
-                )
-                if (_viewState.compareAndSet(prev, next)) {
-                    committedState = next
-                    break
+            val generation: Long
+            synchronized(this) {
+                generation = ++currentImageGeneration
+                while (true) {
+                    val prev = _viewState.value
+                    val next = prev.copy(
+                        isProcessingImage = false,
+                        selectedImageBytes = null,
+                        selectedImageBase64 = null,
+                        pendingSourceUri = null,
+                        sourceFileName = null,
+                        imageFileName = null,
+                        generation = generation,
+                        errorMessage = "Image exceeds maximum allowed size of 25MB"
+                    )
+                    if (_viewState.compareAndSet(prev, next)) {
+                        committedState = next
+                        break
+                    }
                 }
             }
-            if (dir != null) {
+            if (dir != null && committedState != null) {
                 viewModelScope.launch(ioDispatcher) {
                     snapshotMutex.withLock {
                         val stateToCommit = if (committedState.generation == synchronized(this@CaptureViewModel) { currentImageGeneration }) {
@@ -624,22 +660,22 @@ class CaptureViewModel(
             imageName = "draft_capture_image_$generation.jpg"
             genSourceFile = dir?.let { File(it, sourceName) }
             genImageFile = dir?.let { File(it, imageName) }
-        }
 
-        while (true) {
-            val prev = _viewState.value
-            val next = prev.copy(
-                isProcessingImage = true,
-                selectedImageBytes = null,
-                selectedImageBase64 = null,
-                pendingSourceUri = null,
-                sourceFileName = sourceName,
-                imageFileName = null,
-                generation = generation,
-                errorMessage = null
-            )
-            if (_viewState.compareAndSet(prev, next)) {
-                break
+            while (true) {
+                val prev = _viewState.value
+                val next = prev.copy(
+                    isProcessingImage = true,
+                    selectedImageBytes = null,
+                    selectedImageBase64 = null,
+                    pendingSourceUri = null,
+                    sourceFileName = sourceName,
+                    imageFileName = null,
+                    generation = generation,
+                    errorMessage = null
+                )
+                if (_viewState.compareAndSet(prev, next)) {
+                    break
+                }
             }
         }
 
@@ -663,6 +699,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -700,6 +741,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -737,22 +783,22 @@ class CaptureViewModel(
             sourceName = "draft_source_image_$generation.bin"
             imageName = "draft_capture_image_$generation.jpg"
             tempName = "draft_source_image_$generation.tmp"
-        }
 
-        while (true) {
-            val prev = _viewState.value
-            val next = prev.copy(
-                isProcessingImage = true,
-                selectedImageBytes = null,
-                selectedImageBase64 = null,
-                pendingSourceUri = uri.toString(),
-                sourceFileName = null,
-                imageFileName = null,
-                generation = generation,
-                errorMessage = null
-            )
-            if (_viewState.compareAndSet(prev, next)) {
-                break
+            while (true) {
+                val prev = _viewState.value
+                val next = prev.copy(
+                    isProcessingImage = true,
+                    selectedImageBytes = null,
+                    selectedImageBase64 = null,
+                    pendingSourceUri = uri.toString(),
+                    sourceFileName = null,
+                    imageFileName = null,
+                    generation = generation,
+                    errorMessage = null
+                )
+                if (_viewState.compareAndSet(prev, next)) {
+                    break
+                }
             }
         }
         scheduleDraftSnapshot()
@@ -811,6 +857,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -851,6 +902,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null
@@ -890,6 +946,11 @@ class CaptureViewModel(
                 snapshotMutex.withLock {
                     var committedState: CaptureViewState? = null
                     while (true) {
+                        val isCurrent = synchronized(this@CaptureViewModel) { currentImageGeneration == generation }
+                        if (!isCurrent) {
+                            committedState = null
+                            break
+                        }
                         val prev = _viewState.value
                         if (prev.generation != generation) {
                             committedState = null

@@ -990,9 +990,9 @@ class CaptureViewModelTest {
                 Thread.sleep(50)
             }
 
-            // Verify generation 2 files (source, tmp, and compressed) were NOT purged by gen 1 commit
+            // Verify generation 2 referenced files exist and leftover tmp file was cleaned up on terminal completion
             assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
-            assertTrue(gen2Tmp.exists())
+            assertFalse(gen2Tmp.exists())
             assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
 
             // And generation 1 files are purged

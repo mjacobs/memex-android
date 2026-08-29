@@ -191,7 +191,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIncomingShareIntent(intent)
+        if (savedInstanceState == null) {
+            handleIncomingShareIntent(intent)
+        }
         setContent {
             MemexTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -218,5 +220,6 @@ class MainActivity : ComponentActivity() {
     private fun handleIncomingShareIntent(incomingIntent: Intent?) {
         val incomingShare = ShareIntentParser.parse(incomingIntent) ?: return
         captureViewModel.handleIncomingShare(contentResolver, incomingShare)
+        incomingIntent?.action = null
     }
 }

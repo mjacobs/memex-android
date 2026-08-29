@@ -63,8 +63,9 @@ object ShareIntentParser {
             val matcher = URL_PATTERN.matcher(trimmedText)
 
             if (matcher.find()) {
-                val url = matcher.group()
-                val noteRemainder = trimmedText.replace(url, "")
+                val rawUrl = matcher.group()
+                val url = cleanUrl(rawUrl)
+                val noteRemainder = trimmedText.replace(rawUrl, "")
                     .replace(Regex("\\s+"), " ")
                     .trim()
                     .ifBlank { null }
@@ -81,6 +82,27 @@ object ShareIntentParser {
         }
 
         return null
+    }
+
+    /**
+     * Strips sentence-ending punctuation and unmatched closing delimiters while preserving
+     * valid parentheses inside URLs (such as Wikipedia article URLs).
+     */
+    fun cleanUrl(rawUrl: String): String {
+        var url = rawUrl
+        while (url.isNotEmpty() && (url.endsWith(".") || url.endsWith(",") || url.endsWith(";") || url.endsWith(":") || url.endsWith("!") || url.endsWith("?"))) {
+            url = url.dropLast(1)
+        }
+        while (url.endsWith(")") && url.count { it == '(' } < url.count { it == ')' }) {
+            url = url.dropLast(1)
+        }
+        while (url.endsWith("]") && url.count { it == '[' } < url.count { it == ']' }) {
+            url = url.dropLast(1)
+        }
+        while (url.isNotEmpty() && (url.endsWith(".") || url.endsWith(",") || url.endsWith(";") || url.endsWith(":") || url.endsWith("!") || url.endsWith("?"))) {
+            url = url.dropLast(1)
+        }
+        return url
     }
 
     private fun isImageIntent(intent: Intent): Boolean {

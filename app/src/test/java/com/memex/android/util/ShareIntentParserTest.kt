@@ -156,4 +156,50 @@ class ShareIntentParserTest {
         assertEquals(mockUri, image.uri)
         assertNull(image.caption)
     }
+
+    @Test
+    fun testParseUrlWithTrailingSentencePunctuation() {
+        val intent = mockk<Intent>()
+        every { intent.action } returns Intent.ACTION_SEND
+        every { intent.type } returns "text/plain"
+        every { intent.hasExtra(Intent.EXTRA_TEXT) } returns true
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TEXT) } returns "See https://example.com/article)."
+        every { intent.getStringExtra(Intent.EXTRA_TEXT) } returns "See https://example.com/article)."
+        every { intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.clipData } returns null
+        every { intent.data } returns null
+        every { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) } returns null
+
+        val result = ShareIntentParser.parse(intent)
+        assertNotNull(result)
+        assertTrue(result is IncomingShare.Link)
+        val link = result as IncomingShare.Link
+        assertEquals("https://example.com/article", link.url)
+    }
+
+    @Test
+    fun testParseUrlPreservesLegitimateParentheses() {
+        val intent = mockk<Intent>()
+        every { intent.action } returns Intent.ACTION_SEND
+        every { intent.type } returns "text/plain"
+        every { intent.hasExtra(Intent.EXTRA_TEXT) } returns true
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TEXT) } returns "(Read https://en.wikipedia.org/wiki/Rust_(programming_language))."
+        every { intent.getStringExtra(Intent.EXTRA_TEXT) } returns "(Read https://en.wikipedia.org/wiki/Rust_(programming_language))."
+        every { intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.clipData } returns null
+        every { intent.data } returns null
+        every { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) } returns null
+
+        val result = ShareIntentParser.parse(intent)
+        assertNotNull(result)
+        assertTrue(result is IncomingShare.Link)
+        val link = result as IncomingShare.Link
+        assertEquals("https://en.wikipedia.org/wiki/Rust_(programming_language)", link.url)
+    }
 }

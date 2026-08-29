@@ -142,6 +142,7 @@ class CaptureViewModel(
     }
 
     fun handleIncomingShare(contentResolver: ContentResolver, share: IncomingShare) {
+        reset()
         when (share) {
             is IncomingShare.Link -> {
                 setMode(CaptureMode.LINK)

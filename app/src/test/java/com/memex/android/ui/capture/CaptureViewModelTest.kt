@@ -389,6 +389,59 @@ class CaptureViewModelTest {
         assertTrue(viewModel.isCaptureSheetVisible.value)
     }
 
+    @Test
+    fun testHandleIncomingShareCancelsInFlightSubmission() = runTest {
+        val deferredResponse = CompletableDeferred<Result<CaptureResponse>>()
+        val slowRepository = object : FakeCaptureRepository() {
+            override suspend fun captureText(text: String, source: String): Result<CaptureResponse> {
+                return deferredResponse.await()
+            }
+        }
+
+        val testViewModel = CaptureViewModel(
+            captureRepository = slowRepository,
+            audioRecorder = fakeAudioRecorder,
+            imageCompressor = fakeImageCompressor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testViewModel.updateTextInput("Initial note that is slow")
+        testViewModel.submitText()
+        runCurrent()
+
+        // Verify initial submission is uploading
+        assertTrue(testViewModel.viewState.value.isSubmitting)
+        assertTrue(testViewModel.viewState.value.uiState is CaptureUiState.Uploading)
+
+        // Incoming share arrives while previous upload was in progress
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+        val newShare = com.memex.android.util.IncomingShare.Text("New urgent shared text")
+        testViewModel.handleIncomingShare(mockResolver, newShare)
+        runCurrent()
+
+        // Verify previous upload was cancelled, state reset, and new text applied
+        assertFalse(testViewModel.viewState.value.isSubmitting)
+        assertEquals(CaptureUiState.Idle, testViewModel.viewState.value.uiState)
+        assertEquals("New urgent shared text", testViewModel.viewState.value.textInput)
+
+        // Complete the old deferred response to ensure it does not corrupt the new state
+        deferredResponse.complete(
+            Result.success(
+                CaptureResponse(
+                    capture = Capture(id = "old_cap", status = "enriched"),
+                    note = Note(id = "old_note", createdAt = "2026-08-28T00:00:00Z", kind = "capture")
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        // Verify the old response completion did not reset or dismiss the new share
+        assertEquals("New urgent shared text", testViewModel.viewState.value.textInput)
+        assertEquals(CaptureUiState.Idle, testViewModel.viewState.value.uiState)
+        assertTrue(testViewModel.isCaptureSheetVisible.value)
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())

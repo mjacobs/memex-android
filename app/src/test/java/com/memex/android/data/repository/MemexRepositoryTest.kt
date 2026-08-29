@@ -8,6 +8,7 @@ import com.memex.android.data.api.PatchNoteRequest
 import com.memex.android.data.api.PatchTaskRequest
 import com.memex.android.data.local.AppPreferences
 import com.memex.android.data.local.InMemoryAppPreferences
+import com.memex.android.data.local.SharedPreferencesAppPreferences
 import com.memex.android.data.security.InMemorySecureTokenStorage
 import com.memex.android.data.security.SecureTokenStorage
 import kotlinx.coroutines.async
@@ -591,7 +592,7 @@ class MemexRepositoryTest {
     @Test
     fun testAppPreferencesDefaultsAndMutation() {
         val prefs = InMemoryAppPreferences()
-        assertEquals("https://memex-PROJECT_NUMBER.us-central1.run.app", prefs.serverUrl)
+        assertEquals(SharedPreferencesAppPreferences.DEFAULT_SERVER_URL, prefs.serverUrl)
         assertEquals("android", prefs.deviceId)
 
         prefs.serverUrl = "http://10.0.2.2:8000"

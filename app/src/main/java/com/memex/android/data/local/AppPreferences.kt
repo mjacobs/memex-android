@@ -57,7 +57,7 @@ class SharedPreferencesAppPreferences(
         }
 
         const val PREFS_NAME = "memex_app_prefs"
-        const val DEFAULT_SERVER_URL = "https://memex-PROJECT_NUMBER.us-central1.run.app"
+        const val DEFAULT_SERVER_URL = "https://YOUR-SERVICE-URL.run.app"
         const val DEFAULT_DEVICE_ID = "android"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_DEVICE_ID = "device_id"

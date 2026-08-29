@@ -86,6 +86,5 @@ app/src/main/java/com/memex/android/
 
 - [`docs/contracts.md`](docs/contracts.md) — the frozen server API contracts the
   app is written against.
-- [`docs/superpowers/specs/`](docs/superpowers/specs/) — design spec.
-- [`docs/superpowers/plans/`](docs/superpowers/plans/) — implementation plan.
-- [`docs/handoffs/`](docs/handoffs/) — session handoffs.
+- [`docs/image-capture-bug.md`](docs/image-capture-bug.md) — investigation notes
+  on an image-capture decode failure.

@@ -444,25 +444,33 @@ class CaptureViewModelTest {
 
     @Test
     fun testRestoreSavedStateAfterProcessRecreation() {
-        assertFalse(viewModel.isCaptureSheetVisible.value)
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_restore_test").toFile()
+        try {
+            assertFalse(viewModel.isCaptureSheetVisible.value)
 
-        viewModel.restoreSavedState(
-            modeName = "LINK",
-            isSheetVisible = true,
-            textInput = "",
-            linkUrl = "https://example.com/restored",
-            linkTitle = "Restored Article",
-            linkNote = "Saved before process death",
-            imageCaption = null
-        )
+            val draft = CaptureDraft(
+                mode = "LINK",
+                isSheetVisible = true,
+                textInput = "",
+                linkUrl = "https://example.com/restored",
+                linkTitle = "Restored Article",
+                linkNote = "Saved before process death",
+                imageCaption = ""
+            )
+            File(tempDir, "capture_draft.json").writeText(kotlinx.serialization.json.Json.encodeToString(draft))
 
-        val state = viewModel.viewState.value
-        assertEquals(CaptureMode.LINK, state.mode)
-        assertEquals("https://example.com/restored", state.linkUrl)
-        assertEquals("Restored Article", state.linkTitle)
-        assertEquals("Saved before process death", state.linkNote)
-        assertTrue(viewModel.isCaptureSheetVisible.value)
-        assertEquals(CaptureUiState.Idle, state.uiState)
+            viewModel.restoreDraftFromDisk(tempDir)
+
+            val state = viewModel.viewState.value
+            assertEquals(CaptureMode.LINK, state.mode)
+            assertEquals("https://example.com/restored", state.linkUrl)
+            assertEquals("Restored Article", state.linkTitle)
+            assertEquals("Saved before process death", state.linkNote)
+            assertTrue(viewModel.isCaptureSheetVisible.value)
+            assertEquals(CaptureUiState.Idle, state.uiState)
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 
     @Test
@@ -499,6 +507,74 @@ class CaptureViewModelTest {
             freshViewModel.clearDraftFromDisk(tempDir)
             assertFalse(File(tempDir, "capture_draft.json").exists())
             assertFalse(File(tempDir, "draft_capture_image.jpg").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRestoreDraftWithPendingCompressionResumesAndCompletes() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_resume_test").toFile()
+        try {
+            // Write a source image file and a draft marked hasPendingSourceImage = true
+            val dummySourceBytes = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+            File(tempDir, "draft_source_image.bin").writeBytes(dummySourceBytes)
+
+            val draft = CaptureDraft(
+                mode = "IMAGE",
+                isSheetVisible = true,
+                imageCaption = "Interrupted caption",
+                hasCompressedImage = false,
+                hasPendingSourceImage = true
+            )
+            val json = kotlinx.serialization.json.Json.encodeToString(draft)
+            File(tempDir, "capture_draft.json").writeText(json)
+
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            assertTrue(freshViewModel.needsRestoration())
+            freshViewModel.restoreDraftFromDisk(tempDir)
+            advanceUntilIdle()
+
+            val state = freshViewModel.viewState.value
+            assertEquals(CaptureMode.IMAGE, state.mode)
+            assertEquals("Interrupted caption", state.imageCaption)
+            assertFalse(state.isProcessingImage)
+            assertNotNull(state.selectedImageBytes)
+            assertTrue(freshViewModel.isCaptureSheetVisible.value)
+            assertFalse(freshViewModel.needsRestoration())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDraftPersistenceWithSpecialAndEscapedCharacters() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_escape_test").toFile()
+        try {
+            val specialText = "Line 1\nLine 2\tTabbed \"Quotes\" and \\backslashes\\."
+            viewModel.openCaptureSheet(CaptureMode.TEXT)
+            viewModel.updateTextInput(specialText)
+            viewModel.saveDraftToDisk(tempDir)
+
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            freshViewModel.restoreDraftFromDisk(tempDir)
+
+            assertEquals(specialText, freshViewModel.viewState.value.textInput)
+            assertTrue(freshViewModel.isCaptureSheetVisible.value)
         } finally {
             tempDir.deleteRecursively()
         }

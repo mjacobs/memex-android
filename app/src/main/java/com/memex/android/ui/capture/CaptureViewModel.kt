@@ -22,6 +22,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+/**
+ * Serializable draft model stored atomically on private disk cache.
+ */
+@Serializable
+data class CaptureDraft(
+    val mode: String = "TEXT",
+    val isSheetVisible: Boolean = false,
+    val textInput: String = "",
+    val linkUrl: String = "",
+    val linkTitle: String = "",
+    val linkNote: String = "",
+    val imageCaption: String = "",
+    val hasCompressedImage: Boolean = false,
+    val hasPendingSourceImage: Boolean = false
+)
+
 /**
  * Capture modes supported in the Quick Capture interface.
  */
@@ -73,6 +93,19 @@ data class CaptureViewState(
             CaptureMode.IMAGE -> !isProcessingImage && (selectedImageBytes != null || selectedImageBase64 != null) && !isSubmitting
             CaptureMode.LINK -> linkUrl.isNotBlank() && !isSubmitting
         }
+
+    fun isInitialState(): Boolean =
+        mode == CaptureMode.TEXT &&
+        textInput.isEmpty() &&
+        linkUrl.isEmpty() &&
+        linkTitle.isEmpty() &&
+        linkNote.isEmpty() &&
+        imageCaption.isEmpty() &&
+        selectedImageBytes == null &&
+        selectedImageBase64 == null &&
+        !isProcessingImage &&
+        !isRecording &&
+        uiState is CaptureUiState.Idle
 }
 
 /**
@@ -96,6 +129,10 @@ class CaptureViewModel(
     private var submissionJob: Job? = null
     private var compressionJob: Job? = null
     private var activeRecordedAudioFile: File? = null
+
+    private var cacheDir: File? = null
+    private var isRestoredOrInitialized = false
+    private val draftJson = Json { ignoreUnknownKeys = true }
 
     init {
         observeRecorderState()
@@ -123,26 +160,195 @@ class CaptureViewModel(
         }
     }
 
-    fun setMode(mode: CaptureMode) {
-        if (_viewState.value.isRecording) {
-            cancelRecording()
-        }
-        _viewState.update { it.copy(mode = mode, errorMessage = null) }
+    fun setCacheDir(dir: File) {
+        this.cacheDir = dir
     }
 
-    fun openCaptureSheet(mode: CaptureMode? = null) {
-        if (mode != null) {
-            setMode(mode)
+    fun needsRestoration(): Boolean = !isRestoredOrInitialized && _viewState.value.isInitialState()
+
+    private fun scheduleDraftSnapshot() {
+        val dir = cacheDir ?: return
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                val state = _viewState.value
+                val isVisible = _isCaptureSheetVisible.value
+                val sourceFile = File(dir, "draft_source_image.bin")
+                val imageFile = File(dir, "draft_capture_image.jpg")
+                val draftFile = File(dir, "capture_draft.json")
+                val tempFile = File(dir, "capture_draft.tmp")
+
+                if (!isVisible && state.isInitialState()) {
+                    draftFile.delete()
+                    sourceFile.delete()
+                    imageFile.delete()
+                    return@launch
+                }
+
+                val draft = CaptureDraft(
+                    mode = state.mode.name,
+                    isSheetVisible = isVisible,
+                    textInput = state.textInput,
+                    linkUrl = state.linkUrl,
+                    linkTitle = state.linkTitle,
+                    linkNote = state.linkNote,
+                    imageCaption = state.imageCaption,
+                    hasCompressedImage = imageFile.exists() && state.selectedImageBytes != null,
+                    hasPendingSourceImage = sourceFile.exists() && state.isProcessingImage
+                )
+
+                val jsonText = draftJson.encodeToString(draft)
+                tempFile.writeText(jsonText)
+                tempFile.renameTo(draftFile)
+            } catch (_: Exception) {}
         }
+    }
+
+    fun saveDraftToDisk(cacheDir: File) {
+        this.cacheDir = cacheDir
+        try {
+            val state = _viewState.value
+            val isVisible = _isCaptureSheetVisible.value
+            val sourceFile = File(cacheDir, "draft_source_image.bin")
+            val imageFile = File(cacheDir, "draft_capture_image.jpg")
+            val draftFile = File(cacheDir, "capture_draft.json")
+
+            if (!isVisible && state.isInitialState()) {
+                draftFile.delete()
+                sourceFile.delete()
+                imageFile.delete()
+                return
+            }
+
+            val hasCompressed = if (state.selectedImageBytes != null && state.selectedImageBytes.isNotEmpty()) {
+                imageFile.writeBytes(state.selectedImageBytes)
+                true
+            } else {
+                imageFile.exists()
+            }
+
+            val draft = CaptureDraft(
+                mode = state.mode.name,
+                isSheetVisible = isVisible,
+                textInput = state.textInput,
+                linkUrl = state.linkUrl,
+                linkTitle = state.linkTitle,
+                linkNote = state.linkNote,
+                imageCaption = state.imageCaption,
+                hasCompressedImage = hasCompressed,
+                hasPendingSourceImage = sourceFile.exists() && state.isProcessingImage
+            )
+
+            draftFile.writeText(draftJson.encodeToString(draft))
+        } catch (_: Exception) {}
+    }
+
+    fun restoreDraftFromDisk(dir: File) {
+        this.cacheDir = dir
+        try {
+            val draftFile = File(dir, "capture_draft.json")
+            if (!draftFile.exists()) return
+
+            val draft = draftJson.decodeFromString<CaptureDraft>(draftFile.readText())
+            val restoredMode = try { CaptureMode.valueOf(draft.mode) } catch (_: Exception) { CaptureMode.TEXT }
+
+            val imageFile = File(dir, "draft_capture_image.jpg")
+            val sourceFile = File(dir, "draft_source_image.bin")
+
+            var restoredBytes: ByteArray? = null
+            var restoredBase64: String? = null
+            var needsImageResume = false
+
+            if (draft.hasCompressedImage && imageFile.exists()) {
+                val bytes = imageFile.readBytes()
+                if (bytes.isNotEmpty()) {
+                    restoredBytes = bytes
+                    restoredBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                }
+            } else if (draft.hasPendingSourceImage && sourceFile.exists()) {
+                needsImageResume = true
+            }
+
+            _viewState.update {
+                it.copy(
+                    mode = restoredMode,
+                    textInput = draft.textInput,
+                    linkUrl = draft.linkUrl,
+                    linkTitle = draft.linkTitle,
+                    linkNote = draft.linkNote,
+                    imageCaption = draft.imageCaption,
+                    selectedImageBytes = restoredBytes,
+                    selectedImageBase64 = restoredBase64,
+                    isProcessingImage = needsImageResume,
+                    errorMessage = null
+                )
+            }
+            _isCaptureSheetVisible.value = draft.isSheetVisible
+            isRestoredOrInitialized = true
+
+            if (needsImageResume && sourceFile.exists()) {
+                resumeImageCompression(dir, sourceFile)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun resumeImageCompression(dir: File, sourceFile: File) {
+        compressionJob?.cancel()
+        compressionJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val compressed = imageCompressor.compressStream(openStream = { sourceFile.inputStream() })
+                File(dir, "draft_capture_image.jpg").writeBytes(compressed.bytes)
+                _viewState.update {
+                    it.copy(
+                        isProcessingImage = false,
+                        selectedImageBytes = compressed.bytes,
+                        selectedImageBase64 = compressed.base64,
+                        errorMessage = null
+                    )
+                }
+                scheduleDraftSnapshot()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _viewState.update {
+                    it.copy(
+                        isProcessingImage = false,
+                        errorMessage = "Failed to process image: ${e.message}"
+                    )
+                }
+                scheduleDraftSnapshot()
+            }
+        }
+    }
+
+    fun clearDraftFromDisk(cacheDir: File) {
+        try {
+            File(cacheDir, "capture_draft.json").delete()
+            File(cacheDir, "draft_source_image.bin").delete()
+            File(cacheDir, "draft_capture_image.jpg").delete()
+        } catch (_: Exception) {}
+    }
+
+    fun openCaptureSheet(initialMode: CaptureMode = CaptureMode.TEXT) {
+        isRestoredOrInitialized = true
+        _viewState.update { it.copy(mode = initialMode, errorMessage = null) }
         _isCaptureSheetVisible.value = true
+        scheduleDraftSnapshot()
+    }
+
+    fun setMode(mode: CaptureMode) {
+        isRestoredOrInitialized = true
+        _viewState.update { it.copy(mode = mode, errorMessage = null) }
+        scheduleDraftSnapshot()
     }
 
     fun closeCaptureSheet() {
         _isCaptureSheetVisible.value = false
+        scheduleDraftSnapshot()
     }
 
     fun handleIncomingShare(contentResolver: ContentResolver, share: IncomingShare) {
         reset()
+        isRestoredOrInitialized = true
         when (share) {
             is IncomingShare.Link -> {
                 setMode(CaptureMode.LINK)
@@ -180,182 +386,38 @@ class CaptureViewModel(
         }
     }
 
-    /**
-     * Persists capture draft state (including image bytes) to private cache disk to avoid
-     * TransactionTooLargeException in activity instance-state bundles.
-     */
-    fun saveDraftToDisk(cacheDir: File) {
-        try {
-            val state = _viewState.value
-            val isVisible = _isCaptureSheetVisible.value
-            if (!isVisible && state.textInput.isBlank() && state.linkUrl.isBlank() && state.selectedImageBytes == null) {
-                clearDraftFromDisk(cacheDir)
-                return
-            }
-
-            val imageFile = File(cacheDir, "draft_capture_image.jpg")
-            val hasImage = if (state.selectedImageBytes != null && state.selectedImageBytes.isNotEmpty()) {
-                imageFile.writeBytes(state.selectedImageBytes)
-                true
-            } else {
-                if (imageFile.exists()) imageFile.delete()
-                false
-            }
-
-            val draftFile = File(cacheDir, "capture_draft.json")
-            val json = buildString {
-                append("{")
-                append("\"mode\":\"${state.mode.name}\",")
-                append("\"isSheetVisible\":$isVisible,")
-                append("\"textInput\":${escapeJson(state.textInput)},")
-                append("\"linkUrl\":${escapeJson(state.linkUrl)},")
-                append("\"linkTitle\":${escapeJson(state.linkTitle)},")
-                append("\"linkNote\":${escapeJson(state.linkNote)},")
-                append("\"imageCaption\":${escapeJson(state.imageCaption)},")
-                append("\"hasImage\":$hasImage")
-                append("}")
-            }
-            draftFile.writeText(json)
-        } catch (_: Exception) {}
-    }
-
-    /**
-     * Restores draft state and image bytes from private cache disk after process recreation.
-     */
-    fun restoreDraftFromDisk(cacheDir: File) {
-        try {
-            val draftFile = File(cacheDir, "capture_draft.json")
-            if (!draftFile.exists()) return
-
-            val content = draftFile.readText()
-            val modeName = extractJsonField(content, "mode")
-            val isSheetVisible = content.contains("\"isSheetVisible\":true")
-            val textInput = extractJsonField(content, "textInput")
-            val linkUrl = extractJsonField(content, "linkUrl")
-            val linkTitle = extractJsonField(content, "linkTitle")
-            val linkNote = extractJsonField(content, "linkNote")
-            val imageCaption = extractJsonField(content, "imageCaption")
-            val hasImage = content.contains("\"hasImage\":true")
-
-            val restoredMode = modeName?.let {
-                try { CaptureMode.valueOf(it) } catch (_: Exception) { null }
-            } ?: CaptureMode.TEXT
-
-            val imageFile = File(cacheDir, "draft_capture_image.jpg")
-            var restoredBytes: ByteArray? = null
-            var restoredBase64: String? = null
-            if (hasImage && imageFile.exists()) {
-                try {
-                    val bytes = imageFile.readBytes()
-                    if (bytes.isNotEmpty()) {
-                        restoredBytes = bytes
-                        restoredBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                    }
-                } catch (_: Exception) {}
-            }
-
-            _viewState.update {
-                it.copy(
-                    mode = restoredMode,
-                    textInput = textInput.orEmpty(),
-                    linkUrl = linkUrl.orEmpty(),
-                    linkTitle = linkTitle.orEmpty(),
-                    linkNote = linkNote.orEmpty(),
-                    imageCaption = imageCaption.orEmpty(),
-                    selectedImageBytes = restoredBytes,
-                    selectedImageBase64 = restoredBase64,
-                    errorMessage = null
-                )
-            }
-            _isCaptureSheetVisible.value = isSheetVisible
-        } catch (_: Exception) {}
-    }
-
-    fun clearDraftFromDisk(cacheDir: File) {
-        try {
-            File(cacheDir, "capture_draft.json").delete()
-            File(cacheDir, "draft_capture_image.jpg").delete()
-        } catch (_: Exception) {}
-    }
-
-    private fun escapeJson(str: String): String {
-        val escaped = str.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        return "\"$escaped\""
-    }
-
-    private fun extractJsonField(json: String, fieldName: String): String? {
-        val pattern = "\"$fieldName\":\"((?:[^\"\\\\]|\\\\.)*)\"".toRegex()
-        val match = pattern.find(json) ?: return null
-        val raw = match.groupValues[1]
-        return raw.replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-    }
-
-    /**
-     * Restores draft capture state and bottom sheet visibility after process recreation.
-     */
-    fun restoreSavedState(
-        modeName: String?,
-        isSheetVisible: Boolean,
-        textInput: String?,
-        linkUrl: String?,
-        linkTitle: String?,
-        linkNote: String?,
-        imageCaption: String?,
-        imageBytes: ByteArray? = null
-    ) {
-        val restoredMode = modeName?.let {
-            try { CaptureMode.valueOf(it) } catch (_: Exception) { null }
-        } ?: CaptureMode.TEXT
-
-        val restoredBase64 = imageBytes?.let {
-            try { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } catch (_: Exception) { null }
-        }
-
-        _viewState.update {
-            it.copy(
-                mode = restoredMode,
-                textInput = textInput.orEmpty(),
-                linkUrl = linkUrl.orEmpty(),
-                linkTitle = linkTitle.orEmpty(),
-                linkNote = linkNote.orEmpty(),
-                imageCaption = imageCaption.orEmpty(),
-                selectedImageBytes = imageBytes,
-                selectedImageBase64 = restoredBase64,
-                errorMessage = null
-            )
-        }
-        _isCaptureSheetVisible.value = isSheetVisible
-    }
-
     fun updateTextInput(text: String) {
+        isRestoredOrInitialized = true
         _viewState.update { it.copy(textInput = text) }
+        scheduleDraftSnapshot()
     }
 
     fun updateLinkUrl(url: String) {
+        isRestoredOrInitialized = true
         _viewState.update { it.copy(linkUrl = url) }
+        scheduleDraftSnapshot()
     }
 
     fun updateLinkTitle(title: String) {
+        isRestoredOrInitialized = true
         _viewState.update { it.copy(linkTitle = title) }
+        scheduleDraftSnapshot()
     }
 
     fun updateLinkNote(note: String) {
+        isRestoredOrInitialized = true
         _viewState.update { it.copy(linkNote = note) }
+        scheduleDraftSnapshot()
     }
 
     fun updateImageCaption(caption: String) {
+        isRestoredOrInitialized = true
         _viewState.update { it.copy(imageCaption = caption) }
+        scheduleDraftSnapshot()
     }
 
     fun onImageSelected(bytes: ByteArray) {
+        isRestoredOrInitialized = true
         compressionJob?.cancel()
         _viewState.update {
             it.copy(
@@ -365,11 +427,19 @@ class CaptureViewModel(
                 errorMessage = null
             )
         }
+        val dir = cacheDir
+        if (dir != null) {
+            try { File(dir, "draft_source_image.bin").writeBytes(bytes) } catch (_: Exception) {}
+        }
+        scheduleDraftSnapshot()
 
-        compressionJob = viewModelScope.launch {
+        compressionJob = viewModelScope.launch(ioDispatcher) {
             try {
                 val compressed = withContext(defaultDispatcher) {
                     imageCompressor.compress(bytes)
+                }
+                dir?.let {
+                    try { File(it, "draft_capture_image.jpg").writeBytes(compressed.bytes) } catch (_: Exception) {}
                 }
                 _viewState.update {
                     it.copy(
@@ -379,6 +449,7 @@ class CaptureViewModel(
                         errorMessage = null
                     )
                 }
+                scheduleDraftSnapshot()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -388,11 +459,13 @@ class CaptureViewModel(
                         errorMessage = "Failed to process image: ${e.message}"
                     )
                 }
+                scheduleDraftSnapshot()
             }
         }
     }
 
     fun onImageUriSelected(contentResolver: ContentResolver, uri: Uri) {
+        isRestoredOrInitialized = true
         compressionJob?.cancel()
         _viewState.update {
             it.copy(
@@ -402,11 +475,33 @@ class CaptureViewModel(
                 errorMessage = null
             )
         }
+        scheduleDraftSnapshot()
 
-        compressionJob = viewModelScope.launch {
+        compressionJob = viewModelScope.launch(ioDispatcher) {
             try {
-                val compressed = withContext(ioDispatcher) {
-                    imageCompressor.compressStream(openStream = { contentResolver.openInputStream(uri) })
+                val dir = cacheDir
+                val sourceFile = dir?.let { File(it, "draft_source_image.bin") }
+                if (sourceFile != null) {
+                    try {
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            sourceFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+                scheduleDraftSnapshot()
+
+                val compressed = imageCompressor.compressStream(openStream = {
+                    if (sourceFile != null && sourceFile.exists()) {
+                        sourceFile.inputStream()
+                    } else {
+                        contentResolver.openInputStream(uri)
+                    }
+                })
+
+                dir?.let {
+                    try { File(it, "draft_capture_image.jpg").writeBytes(compressed.bytes) } catch (_: Exception) {}
                 }
 
                 _viewState.update {
@@ -417,6 +512,7 @@ class CaptureViewModel(
                         errorMessage = null
                     )
                 }
+                scheduleDraftSnapshot()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -426,6 +522,7 @@ class CaptureViewModel(
                         errorMessage = "Failed to process image: ${e.message}"
                     )
                 }
+                scheduleDraftSnapshot()
             }
         }
     }
@@ -668,6 +765,8 @@ class CaptureViewModel(
         compressionJob = null
         cancelRecording()
         _viewState.value = CaptureViewState()
+        _isCaptureSheetVisible.value = false
+        scheduleDraftSnapshot()
     }
 
     override fun onCleared() {

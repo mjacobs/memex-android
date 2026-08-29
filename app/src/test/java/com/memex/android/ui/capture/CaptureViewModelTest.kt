@@ -643,6 +643,80 @@ class CaptureViewModelTest {
         }
     }
 
+    @Test
+    fun testConcurrentImageSelectionsIsolatesGenerationsAndPromotesLatest() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_concurrency_test").toFile()
+        try {
+            viewModel.setCacheDir(tempDir)
+            viewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            // Select image 1
+            val bytes1 = byteArrayOf(1, 1, 1)
+            viewModel.onImageSelected(bytes1)
+
+            // Immediately select image 2 before 1 finishes
+            val bytes2 = byteArrayOf(2, 2, 2)
+            viewModel.onImageSelected(bytes2)
+            advanceUntilIdle()
+
+            val state = viewModel.viewState.value
+            assertFalse(state.isProcessingImage)
+            assertNotNull(state.selectedImageBytes)
+            assertEquals(3, state.selectedImageBytes?.size)
+            assertEquals(2.toByte(), state.selectedImageBytes?.get(0))
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRestoreDraftDuringPendingUriCopyResumesAndCompresses() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_pending_uri_test").toFile()
+        try {
+            val draft = CaptureDraft(
+                mode = "IMAGE",
+                isSheetVisible = true,
+                imageCaption = "Pending URI caption",
+                hasCompressedImage = false,
+                hasPendingSourceImage = true,
+                pendingSourceUri = "content://com.memex.test/image.jpg"
+            )
+            File(tempDir, "capture_draft.json").writeText(kotlinx.serialization.json.Json.encodeToString(draft))
+
+            io.mockk.mockkStatic(android.net.Uri::class)
+            val mockUri = io.mockk.mockk<android.net.Uri>()
+            io.mockk.every { android.net.Uri.parse("content://com.memex.test/image.jpg") } returns mockUri
+            io.mockk.every { mockUri.toString() } returns "content://com.memex.test/image.jpg"
+
+            val mockContentResolver = io.mockk.mockk<android.content.ContentResolver>()
+            val sampleBytes = byteArrayOf(9, 8, 7, 6)
+            io.mockk.every {
+                mockContentResolver.openInputStream(mockUri)
+            } answers { sampleBytes.inputStream() }
+
+            val freshViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = fakeImageCompressor,
+                defaultDispatcher = testDispatcher,
+                ioDispatcher = testDispatcher
+            )
+
+            freshViewModel.restoreDraftFromDisk(tempDir, mockContentResolver)
+            advanceUntilIdle()
+
+            val state = freshViewModel.viewState.value
+            assertEquals(CaptureMode.IMAGE, state.mode)
+            assertEquals("Pending URI caption", state.imageCaption)
+            assertFalse(state.isProcessingImage)
+            assertNotNull(state.selectedImageBytes)
+            assertTrue(freshViewModel.isCaptureSheetVisible.value)
+        } finally {
+            io.mockk.unmockkStatic(android.net.Uri::class)
+            tempDir.deleteRecursively()
+        }
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())

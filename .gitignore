@@ -17,3 +17,6 @@ app/build/
 .home/
 .bin/
 .go/
+
+# kata per-machine overrides (binding lives in committed .kata.toml)
+.kata.local.toml

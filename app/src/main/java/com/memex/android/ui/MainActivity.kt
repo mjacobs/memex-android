@@ -204,7 +204,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState != null) {
             isShareHandled = savedInstanceState.getBoolean(KEY_SHARE_HANDLED, false)
             if (savedInstanceState.getBoolean(KEY_HAS_DRAFT, false) && captureViewModel.needsRestoration()) {
-                captureViewModel.restoreDraftFromDisk(cacheDir)
+                captureViewModel.restoreDraftFromDisk(cacheDir, contentResolver)
             }
         } else {
             handleIncomingShareIntent(intent)

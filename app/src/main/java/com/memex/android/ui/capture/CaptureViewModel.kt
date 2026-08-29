@@ -218,7 +218,7 @@ class CaptureViewModel(
             val imageFile = state.imageFileName?.let { File(dir, it) }
 
             val hasCompressed = imageFile?.exists() == true && state.selectedImageBytes != null
-            val hasPending = ((sourceFile?.exists() == true) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
+            val hasPending = ((sourceFile?.let { it.isFile && it.length() > 0L } == true) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
 
             val draft = CaptureDraft(
                 mode = state.mode.name,
@@ -314,7 +314,7 @@ class CaptureViewModel(
                 imageFile.exists()
             }
 
-            val hasPending = ((sourceFile.exists()) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
+            val hasPending = ((sourceFile.isFile && sourceFile.length() > 0L) || !state.pendingSourceUri.isNullOrBlank()) && state.isProcessingImage
 
             val draft = CaptureDraft(
                 mode = state.mode.name,
@@ -372,7 +372,7 @@ class CaptureViewModel(
                     restoredBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                 }
             } else if (draft.hasPendingSourceImage) {
-                if (sourceFile.exists()) {
+                if (sourceFile.isFile && sourceFile.length() > 0L) {
                     needsImageResume = true
                 } else if (!draft.pendingSourceUri.isNullOrBlank() && contentResolver != null) {
                     try {
@@ -404,7 +404,7 @@ class CaptureViewModel(
             isRestoredOrInitialized = true
 
             if (needsImageResume) {
-                if (sourceFile.exists()) {
+                if (sourceFile.isFile && sourceFile.length() > 0L) {
                     resumeImageCompression(dir, sourceFile, generation)
                 } else if (resumeUri != null && contentResolver != null) {
                     onImageUriSelected(contentResolver, resumeUri)
@@ -827,7 +827,9 @@ class CaptureViewModel(
                 if (tempFile != null) {
                     var totalCopied = 0L
                     val buffer = ByteArray(8192)
-                    contentResolver.openInputStream(uri)?.use { input ->
+                    val sourceStream = contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException("Could not open the selected image")
+                    sourceStream.use { input ->
                         tempFile.outputStream().use { output ->
                             while (true) {
                                 ensureActive()
@@ -865,6 +867,11 @@ class CaptureViewModel(
                             )
                         } catch (_: Exception) {
                             tempFile.renameTo(genSourceFile)
+                        }
+                        // Both promotions can fail silently. Catch that here instead of
+                        // committing a draft that points at a missing or empty source.
+                        if (!genSourceFile.exists() || genSourceFile.length() == 0L) {
+                            throw IllegalStateException("Could not stage the selected image for compression")
                         }
                     }
                 }

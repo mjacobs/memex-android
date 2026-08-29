@@ -3,6 +3,7 @@ package com.memex.android.util
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.ByteArrayOutputStream
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.util.Base64
 import kotlin.math.roundToInt
@@ -143,8 +144,28 @@ class DefaultImageCompressor : ImageCompressor {
                 inJustDecodeBounds = true
             }
             val boundsStream = openStream() ?: throw IllegalArgumentException("Failed to open image input stream")
+            var sourceByteCount = 0L
             boundsStream.use { stream ->
-                BitmapFactory.decodeStream(stream, null, options)
+                val counting = object : FilterInputStream(stream) {
+                    override fun read(): Int {
+                        val value = super.read()
+                        if (value != -1) sourceByteCount++
+                        return value
+                    }
+
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        val count = super.read(b, off, len)
+                        if (count > 0) sourceByteCount += count
+                        return count
+                    }
+                }
+                BitmapFactory.decodeStream(counting, null, options)
+            }
+
+            // An empty source is a staging failure upstream, not a bad image. Say so,
+            // rather than blaming the format and sending the reader down the wrong path.
+            if (sourceByteCount == 0L) {
+                throw IllegalArgumentException("Unable to decode image stream: source is empty")
             }
 
             if (options.outWidth <= 0 || options.outHeight <= 0) {

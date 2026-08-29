@@ -97,7 +97,10 @@ class ImageCompressorTest {
         }
 
         val optionsSlot = slot<BitmapFactory.Options>()
-        every { BitmapFactory.decodeStream(boundsStream, null, capture(optionsSlot)) } answers {
+        every { BitmapFactory.decodeStream(any(), null, capture(optionsSlot)) } answers {
+            // Drain the stream so the compressor sees a non-empty source and reaches
+            // the format check rather than the empty-source check.
+            firstArg<java.io.InputStream>().readBytes()
             optionsSlot.captured.outWidth = -1
             optionsSlot.captured.outHeight = -1
             null
@@ -113,6 +116,43 @@ class ImageCompressorTest {
 
         assertTrue(callCount > 0, "openStream supplier must be invoked")
         assertTrue(boundsStreamClosed, "boundsStream must be cleanly closed in try-with-resources")
+    }
+
+    @Test
+    fun testCompressStreamEmptySourceReportsEmptyNotBadFormat() {
+        val optionsSlot = slot<BitmapFactory.Options>()
+        every { BitmapFactory.decodeStream(any(), null, capture(optionsSlot)) } answers {
+            firstArg<java.io.InputStream>().readBytes()
+            optionsSlot.captured.outWidth = -1
+            optionsSlot.captured.outHeight = -1
+            null
+        }
+
+        val exception = assertThrows(IllegalArgumentException::class.java) {
+            compressor.compressStream({ ByteArrayInputStream(byteArrayOf()) })
+        }
+
+        assertEquals("Unable to decode image stream: source is empty", exception.message)
+    }
+
+    @Test
+    fun testCompressStreamNonEmptyUndecodableSourceStillReportsBadFormat() {
+        val optionsSlot = slot<BitmapFactory.Options>()
+        every { BitmapFactory.decodeStream(any(), null, capture(optionsSlot)) } answers {
+            firstArg<java.io.InputStream>().readBytes()
+            optionsSlot.captured.outWidth = -1
+            optionsSlot.captured.outHeight = -1
+            null
+        }
+
+        val exception = assertThrows(IllegalArgumentException::class.java) {
+            compressor.compressStream({ ByteArrayInputStream(byteArrayOf(9, 9, 9, 9)) })
+        }
+
+        assertTrue(
+            exception.message?.contains("invalid or unsupported") == true,
+            "A non-empty but undecodable source must still be reported as a format problem"
+        )
     }
 
     @Test
@@ -283,7 +323,10 @@ class ImageCompressorTest {
 
         // Mock bounds decode: sets outWidth and outHeight
         val optionsSlot = slot<BitmapFactory.Options>()
-        every { BitmapFactory.decodeStream(boundsStream, null, capture(optionsSlot)) } answers {
+        every { BitmapFactory.decodeStream(any(), null, capture(optionsSlot)) } answers {
+            // The bounds pass wraps the stream in a byte counter, so match on any stream
+            // and drain it the way a real header decode would.
+            firstArg<java.io.InputStream>().readBytes()
             optionsSlot.captured.outWidth = 1600
             optionsSlot.captured.outHeight = 1200
             null

@@ -859,8 +859,8 @@ class CaptureViewModelTest {
                 captureRepository = fakeCaptureRepository,
                 audioRecorder = null,
                 imageCompressor = fakeImageCompressor,
-                ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
-                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default
+                ioDispatcher = testDispatcher,
+                defaultDispatcher = testDispatcher
             )
             concurrencyViewModel.setCacheDir(tempDir)
             concurrencyViewModel.openCaptureSheet(CaptureMode.IMAGE)
@@ -897,21 +897,8 @@ class CaptureViewModelTest {
             startLatch.countDown()
             assertTrue(doneLatch.await(10, java.util.concurrent.TimeUnit.SECONDS))
 
-            val deadline = System.currentTimeMillis() + 8000
-            while (System.currentTimeMillis() < deadline) {
-                val state = concurrencyViewModel.viewState.value
-                val isProcessing = state.isProcessingImage
-                val isTerminalGen = state.generation == threadCount.toLong()
-                val hasOldFiles = (1 until threadCount).any { gen ->
-                    File(tempDir, "draft_source_image_$gen.bin").exists() ||
-                        File(tempDir, "draft_capture_image_$gen.jpg").exists() ||
-                        File(tempDir, "draft_source_image_$gen.tmp").exists()
-                }
-                if (!isProcessing && isTerminalGen && !hasOldFiles) {
-                    break
-                }
-                Thread.sleep(50)
-            }
+            // Ensure all background compression and snapshot coroutines finish completely
+            advanceUntilIdle()
 
             val finalState = concurrencyViewModel.viewState.value
             assertEquals(threadCount.toLong(), finalState.generation)

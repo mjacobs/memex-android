@@ -774,6 +774,34 @@ class CaptureViewModelTest {
             assertEquals("Image exceeds maximum allowed size of 25MB", state.errorMessage)
             assertNull(state.selectedImageBytes)
             assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testOversizedImageSelectionPurgesExistingDraftImageFiles() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_oversize_purge_test").toFile()
+        try {
+            viewModel.setCacheDir(tempDir)
+            viewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            val normalBytes = byteArrayOf(1, 2, 3)
+            viewModel.onImageSelected(normalBytes)
+            advanceUntilIdle()
+
+            assertTrue(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertTrue(File(tempDir, "draft_source_image_1.bin").exists())
+
+            // Select oversized image
+            val hugeBytes = ByteArray(26 * 1024 * 1024)
+            viewModel.onImageSelected(hugeBytes)
+            advanceUntilIdle()
+
+            assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+            assertEquals("Image exceeds maximum allowed size of 25MB", viewModel.viewState.value.errorMessage)
         } finally {
             tempDir.deleteRecursively()
         }

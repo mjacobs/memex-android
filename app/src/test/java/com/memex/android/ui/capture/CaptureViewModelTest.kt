@@ -859,8 +859,8 @@ class CaptureViewModelTest {
                 captureRepository = fakeCaptureRepository,
                 audioRecorder = null,
                 imageCompressor = fakeImageCompressor,
-                ioDispatcher = testDispatcher,
-                defaultDispatcher = testDispatcher
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default
             )
             concurrencyViewModel.setCacheDir(tempDir)
             concurrencyViewModel.openCaptureSheet(CaptureMode.IMAGE)
@@ -897,8 +897,8 @@ class CaptureViewModelTest {
             startLatch.countDown()
             assertTrue(doneLatch.await(10, java.util.concurrent.TimeUnit.SECONDS))
 
-            // Ensure all background compression and snapshot coroutines finish completely
-            advanceUntilIdle()
+            // Await completion of all parallel background compression & snapshot work
+            concurrencyViewModel.awaitCompressionIdle()
 
             val finalState = concurrencyViewModel.viewState.value
             assertEquals(threadCount.toLong(), finalState.generation)

@@ -259,6 +259,11 @@ class CaptureViewModel(
         }
     }
 
+    internal suspend fun awaitCompressionIdle() {
+        compressionJob?.join()
+        snapshotMutex.withLock { }
+    }
+
     private fun scheduleDraftSnapshot() {
         val dir = cacheDir ?: return
         viewModelScope.launch(ioDispatcher) {

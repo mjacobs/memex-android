@@ -1,7 +1,7 @@
 # Memex for Android
 
-A native Android client for memex, the voice-and-text capture and agentic task
-assistant. It is a Jetpack Compose / Material 3 app that talks to a memex server
+A native Android client for [memex](https://github.com/mjacobs/memex), the
+voice-and-text capture and agentic task assistant. It is a Jetpack Compose / Material 3 app that talks to a memex server
 over its HTTP API.
 
 ## What it does

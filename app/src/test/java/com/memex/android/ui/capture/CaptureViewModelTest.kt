@@ -442,6 +442,29 @@ class CaptureViewModelTest {
         assertTrue(testViewModel.isCaptureSheetVisible.value)
     }
 
+    @Test
+    fun testRestoreSavedStateAfterProcessRecreation() {
+        assertFalse(viewModel.isCaptureSheetVisible.value)
+
+        viewModel.restoreSavedState(
+            modeName = "LINK",
+            isSheetVisible = true,
+            textInput = "",
+            linkUrl = "https://example.com/restored",
+            linkTitle = "Restored Article",
+            linkNote = "Saved before process death",
+            imageCaption = null
+        )
+
+        val state = viewModel.viewState.value
+        assertEquals(CaptureMode.LINK, state.mode)
+        assertEquals("https://example.com/restored", state.linkUrl)
+        assertEquals("Restored Article", state.linkTitle)
+        assertEquals("Saved before process death", state.linkNote)
+        assertTrue(viewModel.isCaptureSheetVisible.value)
+        assertEquals(CaptureUiState.Idle, state.uiState)
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())

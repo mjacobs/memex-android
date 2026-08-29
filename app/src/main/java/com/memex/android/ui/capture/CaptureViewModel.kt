@@ -180,6 +180,36 @@ class CaptureViewModel(
         }
     }
 
+    /**
+     * Restores draft capture state and bottom sheet visibility after process recreation.
+     */
+    fun restoreSavedState(
+        modeName: String?,
+        isSheetVisible: Boolean,
+        textInput: String?,
+        linkUrl: String?,
+        linkTitle: String?,
+        linkNote: String?,
+        imageCaption: String?
+    ) {
+        val restoredMode = modeName?.let {
+            try { CaptureMode.valueOf(it) } catch (_: Exception) { null }
+        } ?: CaptureMode.TEXT
+
+        _viewState.update {
+            it.copy(
+                mode = restoredMode,
+                textInput = textInput.orEmpty(),
+                linkUrl = linkUrl.orEmpty(),
+                linkTitle = linkTitle.orEmpty(),
+                linkNote = linkNote.orEmpty(),
+                imageCaption = imageCaption.orEmpty(),
+                errorMessage = null
+            )
+        }
+        _isCaptureSheetVisible.value = isSheetVisible
+    }
+
     fun updateTextInput(text: String) {
         _viewState.update { it.copy(textInput = text) }
     }

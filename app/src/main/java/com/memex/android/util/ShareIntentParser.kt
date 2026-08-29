@@ -59,7 +59,7 @@ object ShareIntentParser {
             ?: extractText(intent, Intent.EXTRA_TITLE)
 
         if (!rawText.isNullOrBlank()) {
-            val trimmedText = rawText.trim()
+            val trimmedText = rawText.take(100_000).trim()
             val matcher = URL_PATTERN.matcher(trimmedText)
 
             if (matcher.find()) {
@@ -85,24 +85,46 @@ object ShareIntentParser {
     }
 
     /**
-     * Strips sentence-ending punctuation and unmatched closing delimiters while preserving
-     * valid parentheses inside URLs (such as Wikipedia article URLs).
+     * Strips sentence-ending punctuation and unmatched closing delimiters in O(N) linear time
+     * while preserving valid parentheses inside URLs and valid terminal characters (e.g. Yahoo!).
      */
     fun cleanUrl(rawUrl: String): String {
-        var url = rawUrl
-        while (url.isNotEmpty() && (url.endsWith(".") || url.endsWith(",") || url.endsWith(";") || url.endsWith(":") || url.endsWith("!") || url.endsWith("?"))) {
-            url = url.dropLast(1)
+        if (rawUrl.isEmpty()) return ""
+
+        var openParens = 0
+        var closeParens = 0
+        var openBrackets = 0
+        var closeBrackets = 0
+
+        for (i in 0 until rawUrl.length) {
+            when (rawUrl[i]) {
+                '(' -> openParens++
+                ')' -> closeParens++
+                '[' -> openBrackets++
+                ']' -> closeBrackets++
+            }
         }
-        while (url.endsWith(")") && url.count { it == '(' } < url.count { it == ')' }) {
-            url = url.dropLast(1)
+
+        var excessCloseParens = (closeParens - openParens).coerceAtLeast(0)
+        var excessCloseBrackets = (closeBrackets - openBrackets).coerceAtLeast(0)
+
+        var end = rawUrl.length
+        while (end > 0) {
+            val lastChar = rawUrl[end - 1]
+            if (lastChar == ')' && excessCloseParens > 0) {
+                excessCloseParens--
+                end--
+            } else if (lastChar == ']' && excessCloseBrackets > 0) {
+                excessCloseBrackets--
+                end--
+            } else if (lastChar == '.' || lastChar == ',' || lastChar == ';' || lastChar == ':' || lastChar == '"' || lastChar == '\'') {
+                end--
+            } else {
+                break
+            }
         }
-        while (url.endsWith("]") && url.count { it == '[' } < url.count { it == ']' }) {
-            url = url.dropLast(1)
-        }
-        while (url.isNotEmpty() && (url.endsWith(".") || url.endsWith(",") || url.endsWith(";") || url.endsWith(":") || url.endsWith("!") || url.endsWith("?"))) {
-            url = url.dropLast(1)
-        }
-        return url
+
+        return rawUrl.substring(0, end)
     }
 
     private fun isImageIntent(intent: Intent): Boolean {

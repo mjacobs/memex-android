@@ -188,12 +188,38 @@ class MainActivity : ComponentActivity() {
         SettingsViewModelFactory(tokenStorage, appPreferences)
     }
 
+    companion object {
+        private const val KEY_CAPTURE_SHEET_VISIBLE = "key_capture_sheet_visible"
+        private const val KEY_CAPTURE_MODE = "key_capture_mode"
+        private const val KEY_CAPTURE_TEXT = "key_capture_text"
+        private const val KEY_CAPTURE_LINK_URL = "key_capture_link_url"
+        private const val KEY_CAPTURE_LINK_TITLE = "key_capture_link_title"
+        private const val KEY_CAPTURE_LINK_NOTE = "key_capture_link_note"
+        private const val KEY_CAPTURE_IMAGE_CAPTION = "key_capture_image_caption"
+        private const val KEY_SHARE_HANDLED = "key_share_handled"
+    }
+
+    private var isShareHandled = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null) {
+
+        if (savedInstanceState != null) {
+            isShareHandled = savedInstanceState.getBoolean(KEY_SHARE_HANDLED, false)
+            captureViewModel.restoreSavedState(
+                modeName = savedInstanceState.getString(KEY_CAPTURE_MODE),
+                isSheetVisible = savedInstanceState.getBoolean(KEY_CAPTURE_SHEET_VISIBLE, false),
+                textInput = savedInstanceState.getString(KEY_CAPTURE_TEXT),
+                linkUrl = savedInstanceState.getString(KEY_CAPTURE_LINK_URL),
+                linkTitle = savedInstanceState.getString(KEY_CAPTURE_LINK_TITLE),
+                linkNote = savedInstanceState.getString(KEY_CAPTURE_LINK_NOTE),
+                imageCaption = savedInstanceState.getString(KEY_CAPTURE_IMAGE_CAPTION)
+            )
+        } else {
             handleIncomingShareIntent(intent)
         }
+
         setContent {
             MemexTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -211,6 +237,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_SHARE_HANDLED, isShareHandled)
+        outState.putBoolean(KEY_CAPTURE_SHEET_VISIBLE, captureViewModel.isCaptureSheetVisible.value)
+        val captureState = captureViewModel.viewState.value
+        outState.putString(KEY_CAPTURE_MODE, captureState.mode.name)
+        outState.putString(KEY_CAPTURE_TEXT, captureState.textInput)
+        outState.putString(KEY_CAPTURE_LINK_URL, captureState.linkUrl)
+        outState.putString(KEY_CAPTURE_LINK_TITLE, captureState.linkTitle)
+        outState.putString(KEY_CAPTURE_LINK_NOTE, captureState.linkNote)
+        outState.putString(KEY_CAPTURE_IMAGE_CAPTION, captureState.imageCaption)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -219,6 +258,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingShareIntent(incomingIntent: Intent?) {
         val incomingShare = ShareIntentParser.parse(incomingIntent) ?: return
+        isShareHandled = true
         captureViewModel.handleIncomingShare(contentResolver, incomingShare)
         incomingIntent?.action = null
     }

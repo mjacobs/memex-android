@@ -202,4 +202,57 @@ class ShareIntentParserTest {
         val link = result as IncomingShare.Link
         assertEquals("https://en.wikipedia.org/wiki/Rust_(programming_language)", link.url)
     }
+
+    @Test
+    fun testParseUrlPreservesLegitimateTerminalExclamation() {
+        val intent = mockk<Intent>()
+        every { intent.action } returns Intent.ACTION_SEND
+        every { intent.type } returns "text/plain"
+        every { intent.hasExtra(Intent.EXTRA_TEXT) } returns true
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TEXT) } returns "Read https://en.wikipedia.org/wiki/Yahoo!"
+        every { intent.getStringExtra(Intent.EXTRA_TEXT) } returns "Read https://en.wikipedia.org/wiki/Yahoo!"
+        every { intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.clipData } returns null
+        every { intent.data } returns null
+        every { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) } returns null
+
+        val result = ShareIntentParser.parse(intent)
+        assertNotNull(result)
+        assertTrue(result is IncomingShare.Link)
+        val link = result as IncomingShare.Link
+        assertEquals("https://en.wikipedia.org/wiki/Yahoo!", link.url)
+    }
+
+    @Test
+    fun testParseUrlWithThousandsOfUnmatchedParensCompletesInLinearTime() {
+        val massiveTrailingParens = ")".repeat(10_000)
+        val testInput = "Check https://example.com/test$massiveTrailingParens"
+
+        val intent = mockk<Intent>()
+        every { intent.action } returns Intent.ACTION_SEND
+        every { intent.type } returns "text/plain"
+        every { intent.hasExtra(Intent.EXTRA_TEXT) } returns true
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TEXT) } returns testInput
+        every { intent.getStringExtra(Intent.EXTRA_TEXT) } returns testInput
+        every { intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_SUBJECT) } returns null
+        every { intent.getCharSequenceExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.getStringExtra(Intent.EXTRA_TITLE) } returns null
+        every { intent.clipData } returns null
+        every { intent.data } returns null
+        every { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) } returns null
+
+        val startTime = System.currentTimeMillis()
+        val result = ShareIntentParser.parse(intent)
+        val elapsedMs = System.currentTimeMillis() - startTime
+
+        assertNotNull(result)
+        assertTrue(result is IncomingShare.Link)
+        val link = result as IncomingShare.Link
+        assertEquals("https://example.com/test", link.url)
+        assertTrue(elapsedMs < 500, "Parsing 10,000 unmatched parens should complete in <500ms, took ${elapsedMs}ms")
+    }
 }

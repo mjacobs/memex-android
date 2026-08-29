@@ -320,6 +320,75 @@ class CaptureViewModelTest {
         assertEquals("01j6not_uri_img", finishedState.lastCapturedResponse?.capture?.noteId)
     }
 
+    @Test
+    fun testIsCaptureSheetVisibleAndOpenClose() {
+        assertFalse(viewModel.isCaptureSheetVisible.value)
+
+        viewModel.openCaptureSheet(CaptureMode.VOICE)
+        assertTrue(viewModel.isCaptureSheetVisible.value)
+        assertEquals(CaptureMode.VOICE, viewModel.viewState.value.mode)
+
+        viewModel.closeCaptureSheet()
+        assertFalse(viewModel.isCaptureSheetVisible.value)
+    }
+
+    @Test
+    fun testHandleIncomingShareLink() {
+        val share = com.memex.android.util.IncomingShare.Link(
+            url = "https://example.com/article",
+            title = "Article Title",
+            note = "Some interesting note"
+        )
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+
+        viewModel.handleIncomingShare(mockResolver, share)
+
+        val state = viewModel.viewState.value
+        assertEquals(CaptureMode.LINK, state.mode)
+        assertEquals("https://example.com/article", state.linkUrl)
+        assertEquals("Article Title", state.linkTitle)
+        assertEquals("Some interesting note", state.linkNote)
+        assertTrue(viewModel.isCaptureSheetVisible.value)
+    }
+
+    @Test
+    fun testHandleIncomingShareText() {
+        val share = com.memex.android.util.IncomingShare.Text(
+            text = "Shared thoughts and notes"
+        )
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+
+        viewModel.handleIncomingShare(mockResolver, share)
+
+        val state = viewModel.viewState.value
+        assertEquals(CaptureMode.TEXT, state.mode)
+        assertEquals("Shared thoughts and notes", state.textInput)
+        assertTrue(viewModel.isCaptureSheetVisible.value)
+    }
+
+    @Test
+    fun testHandleIncomingShareImage() = runTest {
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+        val testUri = io.mockk.mockk<android.net.Uri>()
+        val dummyData = byteArrayOf(1, 2, 3, 4)
+
+        io.mockk.every { mockResolver.openInputStream(testUri) } returns java.io.ByteArrayInputStream(dummyData)
+
+        val share = com.memex.android.util.IncomingShare.Image(
+            uri = testUri,
+            caption = "Screenshot caption"
+        )
+
+        viewModel.handleIncomingShare(mockResolver, share)
+        advanceUntilIdle()
+
+        val state = viewModel.viewState.value
+        assertEquals(CaptureMode.IMAGE, state.mode)
+        assertEquals("Screenshot caption", state.imageCaption)
+        assertNotNull(state.selectedImageBytes)
+        assertTrue(viewModel.isCaptureSheetVisible.value)
+    }
+
     private open class FakeCaptureRepository : CaptureRepository {
         var textResult: Result<CaptureResponse> = Result.success(CaptureResponse())
         var linkResult: Result<CaptureResponse> = Result.success(CaptureResponse())

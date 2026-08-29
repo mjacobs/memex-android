@@ -1,5 +1,6 @@
 package com.memex.android.ui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -36,6 +37,7 @@ import com.memex.android.util.AudioRecorder
 import com.memex.android.util.DefaultAudioRecorder
 import com.memex.android.util.DefaultImageCompressor
 import com.memex.android.util.ImageCompressor
+import com.memex.android.util.ShareIntentParser
 
 class FeedViewModelFactory(
     private val repository: MemexRepository
@@ -189,6 +191,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIncomingShareIntent(intent)
         setContent {
             MemexTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -204,5 +207,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingShareIntent(intent)
+    }
+
+    private fun handleIncomingShareIntent(incomingIntent: Intent?) {
+        val incomingShare = ShareIntentParser.parse(incomingIntent) ?: return
+        captureViewModel.handleIncomingShare(contentResolver, incomingShare)
     }
 }

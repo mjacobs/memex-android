@@ -9,6 +9,7 @@ import com.memex.android.data.repository.CaptureRepository
 import com.memex.android.util.AudioRecorder
 import com.memex.android.util.DefaultImageCompressor
 import com.memex.android.util.ImageCompressor
+import com.memex.android.util.IncomingShare
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -88,6 +89,9 @@ class CaptureViewModel(
     private val _viewState = MutableStateFlow(CaptureViewState())
     val viewState: StateFlow<CaptureViewState> = _viewState.asStateFlow()
 
+    private val _isCaptureSheetVisible = MutableStateFlow(false)
+    val isCaptureSheetVisible: StateFlow<Boolean> = _isCaptureSheetVisible.asStateFlow()
+
     private var recorderObservationJob: Job? = null
     private var submissionJob: Job? = null
     private var compressionJob: Job? = null
@@ -124,6 +128,55 @@ class CaptureViewModel(
             cancelRecording()
         }
         _viewState.update { it.copy(mode = mode, errorMessage = null) }
+    }
+
+    fun openCaptureSheet(mode: CaptureMode? = null) {
+        if (mode != null) {
+            setMode(mode)
+        }
+        _isCaptureSheetVisible.value = true
+    }
+
+    fun closeCaptureSheet() {
+        _isCaptureSheetVisible.value = false
+    }
+
+    fun handleIncomingShare(contentResolver: ContentResolver, share: IncomingShare) {
+        when (share) {
+            is IncomingShare.Link -> {
+                setMode(CaptureMode.LINK)
+                _viewState.update {
+                    it.copy(
+                        linkUrl = share.url,
+                        linkTitle = share.title.orEmpty(),
+                        linkNote = share.note.orEmpty(),
+                        errorMessage = null
+                    )
+                }
+                openCaptureSheet(CaptureMode.LINK)
+            }
+            is IncomingShare.Text -> {
+                setMode(CaptureMode.TEXT)
+                _viewState.update {
+                    it.copy(
+                        textInput = share.text,
+                        errorMessage = null
+                    )
+                }
+                openCaptureSheet(CaptureMode.TEXT)
+            }
+            is IncomingShare.Image -> {
+                setMode(CaptureMode.IMAGE)
+                _viewState.update {
+                    it.copy(
+                        imageCaption = share.caption.orEmpty(),
+                        errorMessage = null
+                    )
+                }
+                onImageUriSelected(contentResolver, share.uri)
+                openCaptureSheet(CaptureMode.IMAGE)
+            }
+        }
     }
 
     fun updateTextInput(text: String) {

@@ -74,6 +74,7 @@ val BOTTOM_DESTINATIONS = listOf(
     BottomDestination(MemexRoutes.CHAT, "Chat", Icons.Default.Forum)
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MemexNavGraph(
     feedViewModel: FeedViewModel,
@@ -88,6 +89,7 @@ fun MemexNavGraph(
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val isCaptureSheetVisible by captureViewModel.isCaptureSheetVisible.collectAsState()
 
     fun navigateToTab(route: String) {
         if (currentRoute == route) return
@@ -184,10 +186,19 @@ fun MemexNavGraph(
             }
         }
     }
+
+    if (isCaptureSheetVisible) {
+        QuickCaptureBottomSheet(
+            viewModel = captureViewModel,
+            onDismissRequest = { captureViewModel.closeCaptureSheet() },
+            onSuccess = {
+                captureViewModel.closeCaptureSheet()
+                feedViewModel.refresh()
+            }
+        )
+    }
 }
 
-// QuickCaptureBottomSheet builds on ModalBottomSheet, which is still experimental.
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FeedRoute(
     feedViewModel: FeedViewModel,
@@ -196,7 +207,6 @@ private fun FeedRoute(
     modifier: Modifier = Modifier
 ) {
     val feedUiState by feedViewModel.uiState.collectAsState()
-    var showCaptureSheet by rememberSaveable { mutableStateOf(false) }
 
     // Intercept system Back while a note detail is open.
     BackHandler(enabled = feedUiState.selectedNote != null) {
@@ -215,20 +225,9 @@ private fun FeedRoute(
         FeedScreen(
             viewModel = feedViewModel,
             onNoteClick = { noteId -> feedViewModel.selectNote(noteId) },
-            onQuickCaptureClick = { showCaptureSheet = true },
+            onQuickCaptureClick = { captureViewModel.openCaptureSheet() },
             onSettingsClick = onSettingsClick,
             modifier = modifier
-        )
-    }
-
-    if (showCaptureSheet) {
-        QuickCaptureBottomSheet(
-            viewModel = captureViewModel,
-            onDismissRequest = { showCaptureSheet = false },
-            onSuccess = {
-                showCaptureSheet = false
-                feedViewModel.refresh()
-            }
         )
     }
 }

@@ -851,6 +851,73 @@ class CaptureViewModelTest {
     }
 
     @Test
+    fun testConcurrentMultiThreadedImageSelectionsConvergeToHighestGeneration() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_concurrent_multithread_test").toFile()
+        try {
+            val concurrencyViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = null,
+                imageCompressor = fakeImageCompressor,
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default
+            )
+            concurrencyViewModel.setCacheDir(tempDir)
+            concurrencyViewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            val threadCount = 12
+            val executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount)
+            val readyLatch = java.util.concurrent.CountDownLatch(threadCount)
+            val startLatch = java.util.concurrent.CountDownLatch(1)
+            val doneLatch = java.util.concurrent.CountDownLatch(threadCount)
+
+            for (i in 1..threadCount) {
+                executor.submit {
+                    readyLatch.countDown()
+                    startLatch.await()
+                    try {
+                        when (i % 3) {
+                            0 -> {
+                                val oversized = ByteArray(26 * 1024 * 1024)
+                                concurrencyViewModel.onImageSelected(oversized)
+                            }
+                            1 -> {
+                                concurrencyViewModel.onImageSelected(byteArrayOf(i.toByte(), 1, 2))
+                            }
+                            2 -> {
+                                concurrencyViewModel.onImageSelected(byteArrayOf(i.toByte(), 3, 4))
+                            }
+                        }
+                    } finally {
+                        doneLatch.countDown()
+                    }
+                }
+            }
+
+            readyLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            startLatch.countDown()
+            assertTrue(doneLatch.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            executor.shutdown()
+
+            val deadline = System.currentTimeMillis() + 5000
+            while (concurrencyViewModel.viewState.value.isProcessingImage && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+
+            val finalState = concurrencyViewModel.viewState.value
+            assertEquals(threadCount.toLong(), finalState.generation)
+            assertFalse(finalState.isProcessingImage)
+
+            for (gen in 1 until threadCount) {
+                assertFalse(File(tempDir, "draft_source_image_$gen.bin").exists())
+                assertFalse(File(tempDir, "draft_capture_image_$gen.jpg").exists())
+                assertFalse(File(tempDir, "draft_source_image_$gen.tmp").exists())
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun testOversizedSelectionRaceWithValidSelectionDoesNotCorruptGeneration() = runTest {
         val tempDir = java.nio.file.Files.createTempDirectory("memex_oversize_race_test").toFile()
         try {

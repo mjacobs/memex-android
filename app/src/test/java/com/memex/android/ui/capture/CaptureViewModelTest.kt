@@ -678,11 +678,13 @@ class CaptureViewModelTest {
     fun testOlderCompressorPausedCannotPromoteAfterNewSelectionStarts() = runTest {
         val tempDir = java.nio.file.Files.createTempDirectory("memex_pause_compressor_test").toFile()
         try {
-            val pauseDeferred = CompletableDeferred<Unit>()
+            val enteredLatch = java.util.concurrent.CountDownLatch(1)
+            val pauseLatch = java.util.concurrent.CountDownLatch(1)
             val controlledCompressor = object : FakeImageCompressor() {
                 override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage {
                     if (imageBytes.contentEquals(byteArrayOf(1, 1, 1))) {
-                        kotlinx.coroutines.runBlocking { pauseDeferred.await() }
+                        enteredLatch.countDown()
+                        pauseLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
                     }
                     return CompressedImage(bytes = imageBytes, base64 = "base64_encoded_dummy")
                 }
@@ -692,31 +694,105 @@ class CaptureViewModelTest {
                 captureRepository = fakeCaptureRepository,
                 audioRecorder = fakeAudioRecorder,
                 imageCompressor = controlledCompressor,
-                defaultDispatcher = testDispatcher,
-                ioDispatcher = testDispatcher
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default,
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO
             )
             controlledViewModel.setCacheDir(tempDir)
             controlledViewModel.openCaptureSheet(CaptureMode.IMAGE)
 
             // Start first slow image
             controlledViewModel.onImageSelected(byteArrayOf(1, 1, 1))
+            assertTrue(enteredLatch.await(5, java.util.concurrent.TimeUnit.SECONDS))
 
-            // Start second fast image while first is paused in compressor
+            // Start second fast image while first is confirmed paused in compressor
             controlledViewModel.onImageSelected(byteArrayOf(2, 2, 2))
-            advanceUntilIdle()
 
             // Release first compressor
-            pauseDeferred.complete(Unit)
-            advanceUntilIdle()
+            pauseLatch.countDown()
+
+            kotlinx.coroutines.withTimeout(5000) {
+                while (controlledViewModel.viewState.value.isProcessingImage || controlledViewModel.viewState.value.generation != 2L) {
+                    kotlinx.coroutines.delay(50)
+                }
+            }
 
             val finalState = controlledViewModel.viewState.value
             assertEquals(2L, finalState.generation)
             assertEquals("draft_capture_image_2.jpg", finalState.imageFileName)
             assertArrayEquals(byteArrayOf(2, 2, 2), finalState.selectedImageBytes)
             assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
         } finally {
             tempDir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun testOversizedImageSelectionAdvancesGenerationAndInvalidatesInFlight() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_oversize_gen_test").toFile()
+        try {
+            val enteredLatch = java.util.concurrent.CountDownLatch(1)
+            val pauseLatch = java.util.concurrent.CountDownLatch(1)
+            val controlledCompressor = object : FakeImageCompressor() {
+                override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage {
+                    if (imageBytes.contentEquals(byteArrayOf(1, 1, 1))) {
+                        enteredLatch.countDown()
+                        pauseLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                    return CompressedImage(bytes = imageBytes, base64 = "base64_encoded_dummy")
+                }
+            }
+
+            val controlledViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = fakeAudioRecorder,
+                imageCompressor = controlledCompressor,
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default,
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO
+            )
+            controlledViewModel.setCacheDir(tempDir)
+            controlledViewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            controlledViewModel.onImageSelected(byteArrayOf(1, 1, 1))
+            assertTrue(enteredLatch.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+            // Oversized image selection
+            val hugeBytes = ByteArray(26 * 1024 * 1024)
+            controlledViewModel.onImageSelected(hugeBytes)
+
+            // Release first compressor
+            pauseLatch.countDown()
+
+            kotlinx.coroutines.withTimeout(5000) {
+                while (controlledViewModel.viewState.value.isProcessingImage) {
+                    kotlinx.coroutines.delay(50)
+                }
+            }
+
+            val state = controlledViewModel.viewState.value
+            assertEquals(2L, state.generation)
+            assertEquals("Image exceeds maximum allowed size of 25MB", state.errorMessage)
+            assertNull(state.selectedImageBytes)
+            assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFailedAudioSubmissionDeletesFile() = runTest {
+        val tempFile = File.createTempFile("memex_fail_audio", ".mp4")
+        tempFile.writeText("audio data")
+        fakeCaptureRepository.audioResult = Result.failure(RuntimeException("Network error"))
+
+        viewModel.startRecording(tempFile)
+        advanceUntilIdle()
+
+        viewModel.stopRecordingAndSubmit()
+        advanceUntilIdle()
+
+        assertEquals("Network error", viewModel.viewState.value.errorMessage)
+        assertFalse(tempFile.exists())
     }
 
     @Test

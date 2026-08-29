@@ -380,6 +380,16 @@ class CaptureViewModel(
         } catch (_: Exception) {}
     }
 
+    private fun purgeUnreferencedGenerationFiles(dir: File, keepSource: String? = null, keepImage: String? = null) {
+        try {
+            dir.listFiles { file ->
+                val name = file.name
+                (name.startsWith("draft_source_image") || name.startsWith("draft_capture_image")) &&
+                    name != keepSource && name != keepImage
+            }?.forEach { it.delete() }
+        } catch (_: Exception) {}
+    }
+
     private fun resumeImageCompression(dir: File, sourceFile: File, generation: Long) {
         compressionJob?.cancel()
         val imageName = "draft_capture_image_$generation.jpg"
@@ -393,18 +403,31 @@ class CaptureViewModel(
                 imageFile.writeBytes(compressed.bytes)
 
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                selectedImageBytes = compressed.bytes,
-                                selectedImageBase64 = compressed.base64,
-                                imageFileName = imageName,
-                                errorMessage = null
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    var promoted = false
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                promoted = true
+                                current.copy(
+                                    isProcessingImage = false,
+                                    selectedImageBytes = compressed.bytes,
+                                    selectedImageBase64 = compressed.base64,
+                                    imageFileName = imageName,
+                                    errorMessage = null
+                                )
+                            } else {
+                                current
+                            }
                         }
-                        scheduleDraftSnapshot()
-                    } else {
+                        if (promoted) {
+                            scheduleDraftSnapshot()
+                            purgeUnreferencedGenerationFiles(dir, keepSource = sourceFile.name, keepImage = imageName)
+                        }
+                    }
+                    if (!promoted) {
                         imageFile.delete()
                     }
                 }
@@ -414,12 +437,19 @@ class CaptureViewModel(
             } catch (e: Exception) {
                 imageFile.delete()
                 snapshotMutex.withLock {
-                    if (generation == currentImageGeneration) {
-                        _viewState.update {
-                            it.copy(
-                                isProcessingImage = false,
-                                errorMessage = "Failed to process image: ${e.message}"
-                            )
+                    val isCurrent = synchronized(this@CaptureViewModel) {
+                        generation == currentImageGeneration
+                    }
+                    if (isCurrent) {
+                        _viewState.update { current ->
+                            if (current.generation == generation) {
+                                current.copy(
+                                    isProcessingImage = false,
+                                    errorMessage = "Failed to process image: ${e.message}"
+                                )
+                            } else {
+                                current
+                            }
                         }
                         scheduleDraftSnapshot()
                     }
@@ -533,12 +563,16 @@ class CaptureViewModel(
         compressionJob?.cancel()
 
         if (bytes.size > MAX_IMAGE_SOURCE_BYTES) {
+            val generation = synchronized(this) { ++currentImageGeneration }
             _viewState.update {
                 it.copy(
                     isProcessingImage = false,
                     selectedImageBytes = null,
                     selectedImageBase64 = null,
                     pendingSourceUri = null,
+                    sourceFileName = null,
+                    imageFileName = null,
+                    generation = generation,
                     errorMessage = "Image exceeds maximum allowed size of 25MB"
                 )
             }
@@ -547,12 +581,6 @@ class CaptureViewModel(
         }
 
         val dir = cacheDir
-        val oldState = _viewState.value
-        if (dir != null) {
-            oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
-            oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
-        }
-
         val generation: Long
         val sourceName: String
         val imageName: String
@@ -601,9 +629,11 @@ class CaptureViewModel(
                     val isCurrent = synchronized(this@CaptureViewModel) {
                         generation == currentImageGeneration
                     }
+                    var promoted = false
                     if (isCurrent) {
                         _viewState.update { current ->
                             if (current.generation == generation) {
+                                promoted = true
                                 current.copy(
                                     isProcessingImage = false,
                                     selectedImageBytes = compressed.bytes,
@@ -618,8 +648,14 @@ class CaptureViewModel(
                                 current
                             }
                         }
-                        scheduleDraftSnapshot()
-                    } else {
+                        if (promoted) {
+                            scheduleDraftSnapshot()
+                            if (dir != null) {
+                                purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = imageName)
+                            }
+                        }
+                    }
+                    if (!promoted) {
                         genSourceFile?.delete()
                         genImageFile?.delete()
                     }
@@ -658,12 +694,6 @@ class CaptureViewModel(
         compressionJob?.cancel()
 
         val dir = cacheDir
-        val oldState = _viewState.value
-        if (dir != null) {
-            oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
-            oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
-        }
-
         val generation: Long
         val sourceName: String
         val imageName: String
@@ -749,8 +779,10 @@ class CaptureViewModel(
                         genSourceFile?.delete()
                         return@launch
                     }
+                    var uriPromoted = false
                     _viewState.update { current ->
                         if (current.generation == generation) {
+                            uriPromoted = true
                             current.copy(
                                 sourceFileName = sourceName,
                                 pendingSourceUri = null
@@ -759,7 +791,15 @@ class CaptureViewModel(
                             current
                         }
                     }
-                    scheduleDraftSnapshot()
+                    if (uriPromoted) {
+                        scheduleDraftSnapshot()
+                        if (dir != null) {
+                            purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = null)
+                        }
+                    } else {
+                        genSourceFile?.delete()
+                        return@launch
+                    }
                 }
 
                 val compressed = imageCompressor.compressStream(openStream = {
@@ -779,9 +819,11 @@ class CaptureViewModel(
                     val isCurrent = synchronized(this@CaptureViewModel) {
                         generation == currentImageGeneration
                     }
+                    var promoted = false
                     if (isCurrent) {
                         _viewState.update { current ->
                             if (current.generation == generation) {
+                                promoted = true
                                 current.copy(
                                     isProcessingImage = false,
                                     selectedImageBytes = compressed.bytes,
@@ -796,8 +838,14 @@ class CaptureViewModel(
                                 current
                             }
                         }
-                        scheduleDraftSnapshot()
-                    } else {
+                        if (promoted) {
+                            scheduleDraftSnapshot()
+                            if (dir != null) {
+                                purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = imageName)
+                            }
+                        }
+                    }
+                    if (!promoted) {
                         genSourceFile?.delete()
                         genImageFile?.delete()
                     }
@@ -903,10 +951,6 @@ class CaptureViewModel(
                             amplitude = 0f
                         )
                     }
-                    try {
-                        recordedFile.delete()
-                    } catch (_: Exception) {}
-                    activeRecordedAudioFile = null
                 }.onFailure { err ->
                     _viewState.update {
                         it.copy(
@@ -916,11 +960,14 @@ class CaptureViewModel(
                     }
                 }
             } catch (e: CancellationException) {
+                throw e
+            } finally {
                 try {
                     recordedFile.delete()
                 } catch (_: Exception) {}
-                activeRecordedAudioFile = null
-                throw e
+                if (activeRecordedAudioFile == recordedFile) {
+                    activeRecordedAudioFile = null
+                }
             }
         }
     }

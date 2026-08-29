@@ -239,6 +239,7 @@ class CaptureViewModel(
                     StandardCopyOption.REPLACE_EXISTING
                 )
             }
+            purgeUnreferencedGenerationFiles(dir, keepSource = state.sourceFileName, keepImage = state.imageFileName)
             true
         } catch (_: Exception) {
             false
@@ -249,8 +250,9 @@ class CaptureViewModel(
         val dir = cacheDir ?: return
         viewModelScope.launch(ioDispatcher) {
             snapshotMutex.withLock {
-                val state = _viewState.value
-                val isVisible = _isCaptureSheetVisible.value
+                val (state, isVisible) = synchronized(this@CaptureViewModel) {
+                    _viewState.value to _isCaptureSheetVisible.value
+                }
                 commitDraftSnapshotLocked(dir, state, isVisible)
             }
         }
@@ -406,27 +408,23 @@ class CaptureViewModel(
                 imageFile.writeBytes(compressed.bytes)
 
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 selectedImageBytes = compressed.bytes,
                                 selectedImageBase64 = compressed.base64,
                                 imageFileName = imageName,
                                 errorMessage = null
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted) {
-                        val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                        if (committed) {
-                            purgeUnreferencedGenerationFiles(dir, keepSource = sourceFile.name, keepImage = imageName)
-                        }
+                    if (committedState != null) {
+                        commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                     } else {
                         imageFile.delete()
                     }
@@ -436,21 +434,20 @@ class CaptureViewModel(
             } catch (e: Exception) {
                 imageFile.delete()
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 errorMessage = "Failed to process image: ${e.message}"
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted) {
-                        commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
+                    if (committedState != null) {
+                        commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                     }
                 }
             }
@@ -563,9 +560,11 @@ class CaptureViewModel(
 
         val dir = cacheDir
         if (bytes.size > MAX_IMAGE_SOURCE_BYTES) {
-            val generation = synchronized(this) { ++currentImageGeneration }
-            _viewState.update { current ->
-                current.copy(
+            val generation: Long
+            val state: CaptureViewState
+            synchronized(this) {
+                generation = ++currentImageGeneration
+                state = _viewState.value.copy(
                     isProcessingImage = false,
                     selectedImageBytes = null,
                     selectedImageBase64 = null,
@@ -575,13 +574,20 @@ class CaptureViewModel(
                     generation = generation,
                     errorMessage = "Image exceeds maximum allowed size of 25MB"
                 )
+                _viewState.value = state
             }
             if (dir != null) {
                 viewModelScope.launch(ioDispatcher) {
                     snapshotMutex.withLock {
-                        val state = _viewState.value
-                        if (commitDraftSnapshotLocked(dir, state, _isCaptureSheetVisible.value)) {
-                            purgeUnreferencedGenerationFiles(dir, null, null)
+                        val stateToCommit = synchronized(this@CaptureViewModel) {
+                            if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                                state
+                            } else {
+                                null
+                            }
+                        }
+                        if (stateToCommit != null) {
+                            commitDraftSnapshotLocked(dir, stateToCommit, _isCaptureSheetVisible.value)
                         }
                     }
                 }
@@ -602,18 +608,16 @@ class CaptureViewModel(
             genSourceFile = dir?.let { File(it, sourceName) }
             genImageFile = dir?.let { File(it, imageName) }
 
-            _viewState.update { current ->
-                current.copy(
-                    isProcessingImage = true,
-                    selectedImageBytes = null,
-                    selectedImageBase64 = null,
-                    pendingSourceUri = null,
-                    sourceFileName = sourceName,
-                    imageFileName = null,
-                    generation = generation,
-                    errorMessage = null
-                )
-            }
+            _viewState.value = _viewState.value.copy(
+                isProcessingImage = true,
+                selectedImageBytes = null,
+                selectedImageBase64 = null,
+                pendingSourceUri = null,
+                sourceFileName = sourceName,
+                imageFileName = null,
+                generation = generation,
+                errorMessage = null
+            )
         }
 
         if (genSourceFile != null) {
@@ -634,11 +638,9 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 selectedImageBytes = compressed.bytes,
                                 selectedImageBase64 = compressed.base64,
@@ -648,17 +650,15 @@ class CaptureViewModel(
                                 generation = generation,
                                 errorMessage = null
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted) {
+                    if (committedState != null) {
                         if (dir != null) {
-                            val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                            if (committed) {
-                                purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = imageName)
-                            }
+                            commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                         }
                     } else {
                         genSourceFile?.delete()
@@ -671,24 +671,20 @@ class CaptureViewModel(
                 genSourceFile?.delete()
                 genImageFile?.delete()
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 errorMessage = "Failed to process image: ${e.message}"
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted && dir != null) {
-                        val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                        if (committed) {
-                            purgeUnreferencedGenerationFiles(dir, null, null)
-                        }
+                    if (committedState != null && dir != null) {
+                        commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                     }
                 }
             }
@@ -711,18 +707,16 @@ class CaptureViewModel(
             imageName = "draft_capture_image_$generation.jpg"
             tempName = "draft_source_image_$generation.tmp"
 
-            _viewState.update { current ->
-                current.copy(
-                    isProcessingImage = true,
-                    selectedImageBytes = null,
-                    selectedImageBase64 = null,
-                    pendingSourceUri = uri.toString(),
-                    sourceFileName = null,
-                    imageFileName = null,
-                    generation = generation,
-                    errorMessage = null
-                )
-            }
+            _viewState.value = _viewState.value.copy(
+                isProcessingImage = true,
+                selectedImageBytes = null,
+                selectedImageBase64 = null,
+                pendingSourceUri = uri.toString(),
+                sourceFileName = null,
+                imageFileName = null,
+                generation = generation,
+                errorMessage = null
+            )
         }
         scheduleDraftSnapshot()
 
@@ -778,25 +772,21 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 sourceFileName = sourceName,
                                 pendingSourceUri = null
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted) {
+                    if (committedState != null) {
                         if (dir != null) {
-                            val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                            if (committed) {
-                                purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = null)
-                            }
+                            commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                         }
                     } else {
                         genSourceFile?.delete()
@@ -818,11 +808,9 @@ class CaptureViewModel(
                 }
 
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 selectedImageBytes = compressed.bytes,
                                 selectedImageBase64 = compressed.base64,
@@ -832,17 +820,15 @@ class CaptureViewModel(
                                 generation = generation,
                                 errorMessage = null
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted) {
+                    if (committedState != null) {
                         if (dir != null) {
-                            val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                            if (committed) {
-                                purgeUnreferencedGenerationFiles(dir, keepSource = sourceName, keepImage = imageName)
-                            }
+                            commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                         }
                     } else {
                         genSourceFile?.delete()
@@ -857,24 +843,20 @@ class CaptureViewModel(
                 genSourceFile?.delete()
                 genImageFile?.delete()
                 snapshotMutex.withLock {
-                    var isPromoted = false
-                    _viewState.update { current ->
-                        if (current.generation == generation) {
-                            isPromoted = true
-                            current.copy(
+                    val committedState = synchronized(this@CaptureViewModel) {
+                        if (currentImageGeneration == generation && _viewState.value.generation == generation) {
+                            val updated = _viewState.value.copy(
                                 isProcessingImage = false,
                                 errorMessage = "Failed to process image: ${e.message}"
                             )
+                            _viewState.value = updated
+                            updated
                         } else {
-                            isPromoted = false
-                            current
+                            null
                         }
                     }
-                    if (isPromoted && dir != null) {
-                        val committed = commitDraftSnapshotLocked(dir, _viewState.value, _isCaptureSheetVisible.value)
-                        if (committed) {
-                            purgeUnreferencedGenerationFiles(dir, null, null)
-                        }
+                    if (committedState != null && dir != null) {
+                        commitDraftSnapshotLocked(dir, committedState, _isCaptureSheetVisible.value)
                     }
                 }
             }
@@ -1119,10 +1101,16 @@ class CaptureViewModel(
         compressionJob?.cancel()
         compressionJob = null
         cancelRecording()
-        val oldState = _viewState.value
-        _viewState.update { CaptureViewState() }
-        _isCaptureSheetVisible.value = false
+        val oldState: CaptureViewState
+        val newState: CaptureViewState
         val dir = cacheDir
+        synchronized(this) {
+            ++currentImageGeneration
+            oldState = _viewState.value
+            newState = CaptureViewState(generation = currentImageGeneration)
+            _viewState.value = newState
+            _isCaptureSheetVisible.value = false
+        }
         if (dir != null) {
             oldState.sourceFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }
             oldState.imageFileName?.let { try { File(dir, it).delete() } catch (_: Exception) {} }

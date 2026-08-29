@@ -840,10 +840,99 @@ class CaptureViewModelTest {
             advanceUntilIdle()
 
             val state = viewModel.viewState.value
-            assertFalse(state.isProcessingImage)
+            assertEquals(2L, state.generation)
             assertNotNull(state.selectedImageBytes)
-            assertEquals(3, state.selectedImageBytes?.size)
-            assertEquals(2.toByte(), state.selectedImageBytes?.get(0))
+            assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
+            assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
+            assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testOversizedSelectionRaceWithValidSelectionDoesNotCorruptGeneration() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_oversize_race_test").toFile()
+        try {
+            viewModel.setCacheDir(tempDir)
+            viewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            // Select huge bytes
+            val hugeBytes = ByteArray(26 * 1024 * 1024)
+            viewModel.onImageSelected(hugeBytes)
+
+            // Immediately select valid image
+            viewModel.onImageSelected(byteArrayOf(1, 2, 3))
+            advanceUntilIdle()
+
+            val state = viewModel.viewState.value
+            assertEquals(2L, state.generation)
+            assertNull(state.errorMessage)
+            assertNotNull(state.selectedImageBytes)
+            assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
+            assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testNewSelectionStartingDuringPromotionRetainsNewFilesAndDiscardsOld() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_promotion_race_test").toFile()
+        try {
+            val pauseLatch = java.util.concurrent.CountDownLatch(1)
+            val firstCompressingLatch = java.util.concurrent.CountDownLatch(1)
+            var isFirst = true
+            val controlledCompressor = object : FakeImageCompressor() {
+                override fun compress(imageBytes: ByteArray, maxBytes: Long): CompressedImage {
+                    val first = synchronized(this) {
+                        if (isFirst) {
+                            isFirst = false
+                            true
+                        } else false
+                    }
+                    if (first) {
+                        firstCompressingLatch.countDown()
+                        pauseLatch.await()
+                    }
+                    return CompressedImage(bytes = byteArrayOf(9, 9, 9), base64 = "base64-first")
+                }
+            }
+
+            val controlledViewModel = CaptureViewModel(
+                captureRepository = fakeCaptureRepository,
+                audioRecorder = null,
+                imageCompressor = controlledCompressor,
+                ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
+                defaultDispatcher = kotlinx.coroutines.Dispatchers.Default
+            )
+            controlledViewModel.setCacheDir(tempDir)
+            controlledViewModel.openCaptureSheet(CaptureMode.IMAGE)
+
+            // Start first selection
+            controlledViewModel.onImageSelected(byteArrayOf(1, 1, 1))
+
+            firstCompressingLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+
+            // Start second selection
+            controlledViewModel.onImageSelected(byteArrayOf(2, 2, 2))
+
+            // Unpause first compressor
+            pauseLatch.countDown()
+
+            val deadline = System.currentTimeMillis() + 5000
+            while (controlledViewModel.viewState.value.isProcessingImage && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+
+            val state = controlledViewModel.viewState.value
+            assertEquals(2L, state.generation)
+            assertNotNull(state.selectedImageBytes)
+            assertTrue(File(tempDir, "draft_capture_image_2.jpg").exists())
+            assertTrue(File(tempDir, "draft_source_image_2.bin").exists())
+            assertFalse(File(tempDir, "draft_capture_image_1.jpg").exists())
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
         } finally {
             tempDir.deleteRecursively()
         }

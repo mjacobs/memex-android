@@ -853,6 +853,7 @@ class CaptureViewModelTest {
     @Test
     fun testConcurrentMultiThreadedImageSelectionsConvergeToHighestGeneration() = runTest {
         val tempDir = java.nio.file.Files.createTempDirectory("memex_concurrent_multithread_test").toFile()
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(12)
         try {
             val concurrencyViewModel = CaptureViewModel(
                 captureRepository = fakeCaptureRepository,
@@ -865,7 +866,6 @@ class CaptureViewModelTest {
             concurrencyViewModel.openCaptureSheet(CaptureMode.IMAGE)
 
             val threadCount = 12
-            val executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount)
             val readyLatch = java.util.concurrent.CountDownLatch(threadCount)
             val startLatch = java.util.concurrent.CountDownLatch(1)
             val doneLatch = java.util.concurrent.CountDownLatch(threadCount)
@@ -896,10 +896,20 @@ class CaptureViewModelTest {
             readyLatch.await(5, java.util.concurrent.TimeUnit.SECONDS)
             startLatch.countDown()
             assertTrue(doneLatch.await(10, java.util.concurrent.TimeUnit.SECONDS))
-            executor.shutdown()
 
-            val deadline = System.currentTimeMillis() + 5000
-            while (concurrencyViewModel.viewState.value.isProcessingImage && System.currentTimeMillis() < deadline) {
+            val deadline = System.currentTimeMillis() + 8000
+            while (System.currentTimeMillis() < deadline) {
+                val state = concurrencyViewModel.viewState.value
+                val isProcessing = state.isProcessingImage
+                val isTerminalGen = state.generation == threadCount.toLong()
+                val hasOldFiles = (1 until threadCount).any { gen ->
+                    File(tempDir, "draft_source_image_$gen.bin").exists() ||
+                        File(tempDir, "draft_capture_image_$gen.jpg").exists() ||
+                        File(tempDir, "draft_source_image_$gen.tmp").exists()
+                }
+                if (!isProcessing && isTerminalGen && !hasOldFiles) {
+                    break
+                }
                 Thread.sleep(50)
             }
 
@@ -913,6 +923,7 @@ class CaptureViewModelTest {
                 assertFalse(File(tempDir, "draft_source_image_$gen.tmp").exists())
             }
         } finally {
+            executor.shutdownNow()
             tempDir.deleteRecursively()
         }
     }

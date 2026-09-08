@@ -27,7 +27,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -117,7 +117,7 @@ fun MemexNavGraph(
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val isCaptureSheetVisible by captureViewModel.isCaptureSheetVisible.collectAsState()
+    val isCaptureSheetVisible by captureViewModel.isCaptureSheetVisible.collectAsStateWithLifecycle()
 
     // Compact windows — a phone in portrait, or the app in a narrow split-screen slot —
     // keep the bottom bar and one screen at a time. Medium and Expanded move navigation
@@ -324,7 +324,7 @@ private fun FeedRoute(
     foldBounds: Rect? = null,
     modifier: Modifier = Modifier
 ) {
-    val feedUiState by feedViewModel.uiState.collectAsState()
+    val feedUiState by feedViewModel.uiState.collectAsStateWithLifecycle()
 
     // Intercept system Back while a note detail covers the feed. Side by side the feed
     // never left, so Back keeps its usual meaning.
@@ -398,7 +398,7 @@ private fun RunsRoute(
     foldBounds: Rect? = null,
     modifier: Modifier = Modifier
 ) {
-    val runsUiState by runsViewModel.uiState.collectAsState()
+    val runsUiState by runsViewModel.uiState.collectAsStateWithLifecycle()
 
     BackHandler(enabled = !isTwoPane && runsUiState.selectedRun != null) {
         runsViewModel.clearSelectedRun()

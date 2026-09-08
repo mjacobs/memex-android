@@ -31,6 +31,14 @@ over its HTTP API.
 
 Settings is reached from the Feed's top bar.
 
+**Bigger screens.** The layout follows the width of the app's window, not the
+device. On a phone held upright it is unchanged: five tabs along the bottom, one
+screen at a time. From 600dp wide — a phone in landscape, a small tablet, a
+split-screen slot — the tabs move to a navigation rail down the leading edge.
+From 840dp wide, and on a half-opened foldable whose hinge splits the screen,
+Feed and Runs show their list and the selected note or run side by side, so
+picking an item no longer replaces the list.
+
 ## Connecting it to a server
 
 Everything is configured in **Settings**:

@@ -75,7 +75,10 @@ fun NoteDetailScreen(
     noteId: String,
     viewModel: FeedViewModel,
     onBackClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // In a two-pane layout the feed stays on screen next to this detail, so there is
+    // nothing to go back to and the arrow is dropped.
+    showBackButton: Boolean = true
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val note = uiState.selectedNote
@@ -89,11 +92,13 @@ fun NoteDetailScreen(
             TopAppBar(
                 title = { Text(text = "Note Detail") },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Navigate back"
-                        )
+                    if (showBackButton) {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Navigate back"
+                            )
+                        }
                     }
                 },
                 actions = {

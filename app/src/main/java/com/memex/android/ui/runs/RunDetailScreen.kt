@@ -45,7 +45,10 @@ fun RunDetailScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
     onNoteClick: (String) -> Unit = {},
-    onApprovalsClick: () -> Unit = {}
+    onApprovalsClick: () -> Unit = {},
+    // In a two-pane layout the run list stays on screen next to this detail, so there
+    // is nothing to go back to and the arrow is dropped.
+    showBackButton: Boolean = true
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val run = uiState.selectedRun
@@ -61,11 +64,13 @@ fun RunDetailScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back to routine runs"
-                        )
+                    if (showBackButton) {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to routine runs"
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

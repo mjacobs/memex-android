@@ -8,6 +8,11 @@ import com.memex.android.data.api.ChatStreamState
 import com.memex.android.data.model.ChatSession
 import com.memex.android.data.model.TraceEvent
 import com.memex.android.data.repository.ChatRepository
+import com.memex.android.di.MainDispatcher
+import com.memex.android.di.NowProvider
+import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +22,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Instant
 
 data class ChatUiState(
     val sessions: List<ChatSession> = emptyList(),
@@ -34,10 +38,11 @@ data class ChatUiState(
  * Drives the streaming chat screen. Chat is optional on a given backend revision, so a
  * 404 or 503 is surfaced as a calm "unavailable" banner rather than an error toast.
  */
-class ChatViewModel(
+@HiltViewModel
+class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main,
-    private val nowProvider: () -> String = { Instant.now().toString() }
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main,
+    @param:NowProvider private val nowProvider: () -> String = { Instant.now().toString() }
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())

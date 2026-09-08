@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.memex.android.data.model.Task
 import com.memex.android.data.repository.MemexRepository
+import com.memex.android.di.MainDispatcher
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -33,9 +36,10 @@ data class TasksUiState(
  * Drives the Tasks screen: status tabs plus optimistic completion toggling that
  * rolls the row back to its previous status if the PATCH fails.
  */
-class TasksViewModel(
+@HiltViewModel
+class TasksViewModel @Inject constructor(
     private val repository: MemexRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TasksUiState())

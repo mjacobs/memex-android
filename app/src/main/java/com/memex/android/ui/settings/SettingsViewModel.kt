@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.memex.android.data.api.AuthInterceptor
 import com.memex.android.data.local.AppPreferences
 import com.memex.android.data.security.SecureTokenStorage
+import com.memex.android.di.MainDispatcher
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -44,11 +47,12 @@ data class SettingsUiState(
  * it was entered for, so pointing the app at a different host discards it rather than
  * sending it somewhere new.
  */
-class SettingsViewModel(
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
     private val tokenStorage: SecureTokenStorage,
     private val appPreferences: AppPreferences,
-    private val connectionTester: suspend (serverUrl: String, token: String?) -> Result<String>,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
+    private val connectionTester: ConnectionTester,
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -142,7 +146,7 @@ class SettingsViewModel(
 
         viewModelScope.launch(dispatcher) {
             val result = try {
-                connectionTester(normalizedUrl, token)
+                connectionTester.test(normalizedUrl, token)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

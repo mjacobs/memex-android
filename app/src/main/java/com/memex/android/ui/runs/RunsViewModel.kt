@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.memex.android.data.model.RoutineRun
 import com.memex.android.data.repository.MemexRepository
+import com.memex.android.di.MainDispatcher
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -34,9 +37,10 @@ data class RunsUiState(
  * Drives the routine runs history. The list endpoint elides traces, so opening a run
  * re-fetches it by id to get the full trace for replay.
  */
-class RunsViewModel(
+@HiltViewModel
+class RunsViewModel @Inject constructor(
     private val repository: MemexRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RunsUiState())

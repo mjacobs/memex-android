@@ -119,6 +119,7 @@ app/src/main/java/com/memex/android/
   data/local/        Server URL and device-id preferences
   data/repository/   Notes, captures, chat
   data/security/     Keystore-backed key storage
+  di/                Hilt modules and qualifiers that wire the app together
   ui/                One package per screen (feed, tasks, approvals, runs, chat,
                      settings, capture) plus shared components and theme
   util/              Audio recording, image compression, share-intent parsing

@@ -6,6 +6,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
+ * The connection probe as an injectable seam. It is a `fun interface` so a caller can
+ * still pass a plain lambda, and so the DI graph has a real type to bind.
+ */
+fun interface ConnectionTester {
+    suspend fun test(serverUrl: String, token: String?): Result<String>
+}
+
+/**
  * Probes a Memex deployment with the supplied credentials without touching the app's
  * live API stack: `/health` proves reachability, `/api/v1/notes?limit=1` proves the
  * bearer key is accepted.

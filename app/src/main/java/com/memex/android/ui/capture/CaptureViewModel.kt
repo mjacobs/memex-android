@@ -6,10 +6,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.memex.android.data.api.CaptureResponse
 import com.memex.android.data.repository.CaptureRepository
+import com.memex.android.di.DefaultDispatcher
+import com.memex.android.di.IoDispatcher
 import com.memex.android.util.AudioRecorder
 import com.memex.android.util.DefaultImageCompressor
 import com.memex.android.util.ImageCompressor
 import com.memex.android.util.IncomingShare
+import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -20,13 +27,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -127,12 +130,13 @@ data class CaptureViewState(
 /**
  * ViewModel managing multi-modal capture state (Text, Voice, Image, Link).
  */
-class CaptureViewModel(
+@HiltViewModel
+class CaptureViewModel @Inject constructor(
     private val captureRepository: CaptureRepository,
     private val audioRecorder: AudioRecorder? = null,
     private val imageCompressor: ImageCompressor = DefaultImageCompressor(),
-    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    @param:DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
     companion object {

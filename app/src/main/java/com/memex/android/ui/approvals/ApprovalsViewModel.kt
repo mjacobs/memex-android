@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.memex.android.data.model.Approval
 import com.memex.android.data.repository.MemexRepository
+import com.memex.android.di.MainDispatcher
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -34,9 +37,10 @@ data class ApprovalsUiState(
  * active removes it from the list so the card animates away; on a resolved tab the
  * item is replaced in place with the server's updated copy.
  */
-class ApprovalsViewModel(
+@HiltViewModel
+class ApprovalsViewModel @Inject constructor(
     private val repository: MemexRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ApprovalsUiState())

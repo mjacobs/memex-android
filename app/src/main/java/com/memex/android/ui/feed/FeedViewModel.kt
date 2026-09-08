@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.memex.android.data.model.Note
 import com.memex.android.data.model.Task
 import com.memex.android.data.repository.MemexRepository
+import com.memex.android.di.MainDispatcher
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -32,9 +35,10 @@ data class FeedUiState(
     val isDeleting: Boolean = false
 )
 
-class FeedViewModel(
+@HiltViewModel
+class FeedViewModel @Inject constructor(
     private val repository: MemexRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
+    @param:MainDispatcher private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FeedUiState())

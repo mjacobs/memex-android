@@ -31,7 +31,7 @@ class SettingsViewModelTest {
     private fun viewModel(): SettingsViewModel = SettingsViewModel(
         tokenStorage = tokenStorage,
         appPreferences = appPreferences,
-        connectionTester = { url, token ->
+        connectionTester = ConnectionTester { url, token ->
             testedUrls += url
             testedTokens += token
             testerResult

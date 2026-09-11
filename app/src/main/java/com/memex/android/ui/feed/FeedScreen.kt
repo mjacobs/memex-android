@@ -57,6 +57,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.TextButton
+import com.memex.android.ui.clipboard.ClipboardActivity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,6 +92,7 @@ fun FeedScreen(
     modifier: Modifier = Modifier,
     onSettingsClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
@@ -132,6 +137,7 @@ fun FeedScreen(
                     }
                 },
                 actions = {
+                    TextButton(onClick = { context.startActivity(Intent(context, ClipboardActivity::class.java)) }) { Text("Clipboard") }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(
                             imageVector = Icons.Default.Refresh,

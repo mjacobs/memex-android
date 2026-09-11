@@ -1,5 +1,8 @@
 package com.memex.android.data.api
 
+import com.memex.android.data.repository.*
+import okhttp3.ResponseBody
+import retrofit2.http.Streaming
 import okhttp3.RequestBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
@@ -14,6 +17,19 @@ import retrofit2.http.Query
  * Retrofit interface defining the Memex REST API endpoints matching `docs/contracts.md`.
  */
 interface MemexApiService {
+    @GET("api/v1/clipboard")
+    suspend fun clipboard(@Query("before") before: String? = null): ClipboardPage
+    @POST("api/v1/clipboard")
+    suspend fun clipboardCreate(@Body request: ClipboardRequest): ClipboardResponse
+    @GET("api/v1/clipboard/{id}")
+    suspend fun clipboardGet(@Path("id") id: String): ClipboardResponse
+    @Streaming @GET("api/v1/clipboard/{id}/content")
+    suspend fun clipboardContent(@Path("id") id: String): ResponseBody
+    @DELETE("api/v1/clipboard/{id}")
+    suspend fun clipboardDelete(@Path("id") id: String): ClipboardDeleted
+    @POST("api/v1/clipboard/{id}/keep")
+    suspend fun clipboardKeep(@Path("id") id: String): ClipboardKeepResponse
+
 
     @GET("health")
     suspend fun getHealth(): HealthResponse

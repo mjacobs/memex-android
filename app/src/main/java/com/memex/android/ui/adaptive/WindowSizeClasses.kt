@@ -1,5 +1,6 @@
 package com.memex.android.ui.adaptive
 
+import android.graphics.Rect
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.collectFoldingFeaturesAsState
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -56,21 +57,59 @@ val WindowWidthSizeClass.supportsTwoPane: Boolean
     get() = this == WindowWidthSizeClass.Expanded
 
 /**
+ * The horizontal bounds, in window pixels, of the separating vertical fold — the
+ * hinge of a half-opened foldable — or `null` when there is no such fold. A window can
+ * report several folding features; only a separating vertical one actually splits the
+ * screen into two panels worth giving one pane each.
+ */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+fun currentVerticalFoldBounds(): Rect? {
+    val foldingFeatures by collectFoldingFeaturesAsState()
+    return foldingFeatures.firstOrNull {
+        it.isSeparating && it.orientation == FoldingFeature.Orientation.VERTICAL
+    }?.bounds
+}
+
+/**
  * Whether this window should show a list and its detail side by side.
  *
  * Expanded widths always can. A half-opened foldable is the extra case: its window can
  * measure only Medium, but the hinge already splits the screen into two panels, so one
  * pane per panel reads better than a single view straddling the fold.
  */
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun currentWindowSupportsTwoPane(
     widthSizeClass: WindowWidthSizeClass = currentWindowWidthSizeClass()
 ): Boolean {
-    val foldingFeatures by collectFoldingFeaturesAsState()
-    val isSplitByVerticalFold = foldingFeatures.any {
-        it.isSeparating && it.orientation == FoldingFeature.Orientation.VERTICAL
-    }
+    val isSplitByVerticalFold = currentVerticalFoldBounds() != null
     return widthSizeClass.supportsTwoPane ||
         (widthSizeClass == WindowWidthSizeClass.Medium && isSplitByVerticalFold)
 }
+
+/**
+ * The fraction of [containerWidth] the list pane should occupy so its edge lands on
+ * the fold instead of a fixed split that may cross it. [foldLeft] is the hinge's left
+ * edge, in the same unit as [containerWidth] (both px, or both dp).
+ *
+ * Falls back to [fallback] when there's no fold to align to, or the fold sits so close
+ * to an edge that giving it the pane boundary would leave one pane too small to be
+ * useful. Pure, so it is unit testable without a window or a Compose runtime.
+ */
+fun listPaneFractionForFold(
+    containerWidth: Int,
+    foldLeft: Int?,
+    fallback: Float
+): Float {
+    if (containerWidth <= 0 || foldLeft == null) return fallback
+    val fraction = foldLeft.toFloat() / containerWidth
+    return if (fraction in MIN_FOLD_PANE_FRACTION..MAX_FOLD_PANE_FRACTION) {
+        fraction
+    } else {
+        fallback
+    }
+}
+
+/** Bounds outside which a fold-aligned split would leave a pane too cramped to use. */
+private const val MIN_FOLD_PANE_FRACTION = 0.2f
+private const val MAX_FOLD_PANE_FRACTION = 0.8f

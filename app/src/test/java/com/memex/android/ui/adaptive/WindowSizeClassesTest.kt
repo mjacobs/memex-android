@@ -40,4 +40,42 @@ class WindowSizeClassesTest {
         assertFalse(WindowWidthSizeClass.Medium.supportsTwoPane)
         assertTrue(WindowWidthSizeClass.Expanded.supportsTwoPane)
     }
+
+    @Test
+    fun `pane split lands on a fold near the middle`() {
+        val fraction = listPaneFractionForFold(
+            containerWidth = 1000,
+            foldLeft = 480,
+            fallback = 0.4f
+        )
+        assertEquals(0.48f, fraction, 0.001f)
+    }
+
+    @Test
+    fun `pane split falls back without a fold`() {
+        assertEquals(
+            0.4f,
+            listPaneFractionForFold(containerWidth = 1000, foldLeft = null, fallback = 0.4f)
+        )
+    }
+
+    @Test
+    fun `pane split falls back when the fold is too close to an edge`() {
+        assertEquals(
+            0.4f,
+            listPaneFractionForFold(containerWidth = 1000, foldLeft = 50, fallback = 0.4f)
+        )
+        assertEquals(
+            0.4f,
+            listPaneFractionForFold(containerWidth = 1000, foldLeft = 950, fallback = 0.4f)
+        )
+    }
+
+    @Test
+    fun `pane split falls back for a zero or negative container width`() {
+        assertEquals(
+            0.4f,
+            listPaneFractionForFold(containerWidth = 0, foldLeft = 100, fallback = 0.4f)
+        )
+    }
 }

@@ -324,6 +324,84 @@ class CaptureViewModelTest {
     }
 
     @Test
+    fun testImageUriSelectionWithNullResolverStreamReportsError() = runTest {
+        viewModel.setMode(CaptureMode.IMAGE)
+        val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+        val testUri = io.mockk.mockk<android.net.Uri>()
+
+        io.mockk.every { mockResolver.openInputStream(testUri) } returns null
+
+        viewModel.onImageUriSelected(mockResolver, testUri)
+        advanceUntilIdle()
+
+        val state = viewModel.viewState.value
+        assertFalse(state.isProcessingImage)
+        assertNull(state.selectedImageBytes)
+        assertNotNull(state.errorMessage)
+        assertFalse(state.canSubmit)
+    }
+
+    @Test
+    fun testImageUriSelectionWithEmptyStagedSourceReportsError() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_empty_source_test").toFile()
+        try {
+            viewModel.saveDraftToDisk(tempDir)
+            viewModel.setMode(CaptureMode.IMAGE)
+
+            val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+            val testUri = io.mockk.mockk<android.net.Uri>()
+            io.mockk.every { mockResolver.openInputStream(testUri) } returns
+                java.io.ByteArrayInputStream(ByteArray(0))
+
+            viewModel.onImageUriSelected(mockResolver, testUri)
+            advanceUntilIdle()
+
+            val state = viewModel.viewState.value
+            assertFalse(state.isProcessingImage)
+            assertNull(state.selectedImageBytes)
+            assertNotNull(state.errorMessage)
+            assertFalse(state.canSubmit)
+            assertFalse(File(tempDir, "draft_source_image_1.bin").exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testImageUriSelectionWithFailedPromotionOntoExistingDestinationReportsError() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("memex_stale_dest_test").toFile()
+        try {
+            viewModel.saveDraftToDisk(tempDir)
+            viewModel.setMode(CaptureMode.IMAGE)
+
+            // Simulate a stale, non-empty destination left behind by an earlier generation
+            // by pre-creating it as a directory: both Files.move and File.renameTo fail to
+            // promote a regular file onto an existing directory, so this exercises the
+            // failed-promotion path without needing to fake filesystem calls.
+            val staleDestination = File(tempDir, "draft_source_image_1.bin")
+            staleDestination.mkdirs()
+            File(staleDestination, "leftover.bin").writeBytes(byteArrayOf(1, 2, 3))
+
+            val mockResolver = io.mockk.mockk<android.content.ContentResolver>()
+            val testUri = io.mockk.mockk<android.net.Uri>()
+            io.mockk.every { mockResolver.openInputStream(testUri) } returns
+                java.io.ByteArrayInputStream(byteArrayOf(9, 9, 9, 9))
+
+            viewModel.onImageUriSelected(mockResolver, testUri)
+            advanceUntilIdle()
+
+            val state = viewModel.viewState.value
+            assertFalse(state.isProcessingImage)
+            assertNull(state.selectedImageBytes)
+            assertNotNull(state.errorMessage)
+            assertFalse(state.canSubmit)
+            assertFalse(fakeImageCompressor.streamSupplierCalled)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun testIsCaptureSheetVisibleAndOpenClose() {
         assertFalse(viewModel.isCaptureSheetVisible.value)
 

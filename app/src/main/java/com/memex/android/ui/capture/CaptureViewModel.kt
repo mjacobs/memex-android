@@ -859,18 +859,31 @@ class CaptureViewModel(
                         return@launch
                     }
                     if (genSourceFile != null) {
-                        try {
+                        var promoted = try {
                             Files.move(
                                 tempFile.toPath(),
                                 genSourceFile.toPath(),
                                 StandardCopyOption.REPLACE_EXISTING
                             )
+                            true
                         } catch (_: Exception) {
+                            // Files.move may have left a stale destination from an earlier
+                            // generation in place; clear it so a failed rename below can't
+                            // be masked by that leftover file passing validation.
+                            genSourceFile.delete()
                             tempFile.renameTo(genSourceFile)
                         }
-                        // Both promotions can fail silently. Catch that here instead of
-                        // committing a draft that points at a missing or empty source.
-                        if (!genSourceFile.exists() || genSourceFile.length() == 0L) {
+                        // Both promotions can fail silently, and the temp file may or may
+                        // not have been consumed. Require the temp file to be gone and the
+                        // destination to hold exactly the bytes we copied, instead of
+                        // committing a draft that points at a missing, empty, or stale
+                        // source.
+                        if (!promoted ||
+                            tempFile.exists() ||
+                            !genSourceFile.exists() ||
+                            genSourceFile.length() == 0L ||
+                            genSourceFile.length() != totalCopied
+                        ) {
                             throw IllegalStateException("Could not stage the selected image for compression")
                         }
                     }

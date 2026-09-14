@@ -30,7 +30,31 @@ android {
         debug {
             isDebuggable = true
         }
+        create("releaseInstrumented") {
+            // Mirrors `release` (R8 minification + resource shrinking) but stays
+            // debuggable and debug-signed so the existing on-device MockWebServer
+            // UI suite can be installed and run against it. This is what actually
+            // exercises the Retrofit/kotlinx.serialization proguard-rules.pro keep
+            // rules; the plain `debug` build type never runs R8 at all, so a
+            // missing keep rule would only surface as a runtime crash in a real
+            // release build.
+            initWith(getByName("release"))
+            isDebuggable = true
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.getByName("debug")
+            testProguardFiles("proguard-rules-android-test.pro")
+        }
     }
+
+    // NOTE: AGP only ever compiles/runs androidTest and unit-test sources
+    // against a single "test build type" per module (default: `debug`); this
+    // is a hard AGP limitation without adding a product flavor dimension. So
+    // `releaseInstrumented` is not exercised by `./gradlew connectedAndroidTest`
+    // or `testDebugUnitTest` automatically. To actually run the MockWebServer
+    // UI suite against it (e.g. in a dedicated CI job) set
+    //     android.testBuildType = "releaseInstrumented"
+    // for that invocation — which redirects *all* androidTest/unitTest tasks
+    // to this variant, so it should be its own job, not the default one.
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

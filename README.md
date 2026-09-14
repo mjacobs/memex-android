@@ -41,6 +41,11 @@ Everything is configured in **Settings**:
 3. **Save & Test Connection** — verifies the app can actually reach the server
    before you rely on it.
 
+Changing the server URL only affects the connection test itself. The API
+clients used by the rest of the app are created once, on first use, and keep
+the URL that was current then, so restart the app after saving a changed
+server URL.
+
 The key is stored in `EncryptedSharedPreferences` backed by the Android Keystore
 (AES256-GCM) and never leaves the app except as an `Authorization` header to the
 server URL you configured. Backups are disabled for the app, and the credential

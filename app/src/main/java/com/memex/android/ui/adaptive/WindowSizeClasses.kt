@@ -88,26 +88,57 @@ fun currentWindowSupportsTwoPane(
 }
 
 /**
- * The fraction of [containerWidth] the list pane should occupy so its edge lands on
- * the fold instead of a fixed split that may cross it. [foldLeft] is the hinge's left
- * edge, in the same unit as [containerWidth] (both px, or both dp).
+ * How a two-pane row should be split so its panes sit either side of a hinge.
  *
- * Falls back to [fallback] when there's no fold to align to, or the fold sits so close
- * to an edge that giving it the pane boundary would leave one pane too small to be
- * useful. Pure, so it is unit testable without a window or a Compose runtime.
+ * [listWidthPx] is the width of the list pane and [hingeWidthPx] the gap reserved for
+ * the hinge itself; the detail pane takes what is left. A null [listWidthPx] means
+ * there is nothing to align to and the caller should use its fixed weights.
  */
-fun listPaneFractionForFold(
-    containerWidth: Int,
-    foldLeft: Int?,
-    fallback: Float
-): Float {
-    if (containerWidth <= 0 || foldLeft == null) return fallback
-    val fraction = foldLeft.toFloat() / containerWidth
-    return if (fraction in MIN_FOLD_PANE_FRACTION..MAX_FOLD_PANE_FRACTION) {
-        fraction
-    } else {
-        fallback
+data class FoldAlignedSplit(
+    val listWidthPx: Int?,
+    val hingeWidthPx: Int
+) {
+    companion object {
+        /** No fold to align to: the caller falls back to its fixed pane weights. */
+        val None = FoldAlignedSplit(listWidthPx = null, hingeWidthPx = 0)
     }
+}
+
+/**
+ * Where to split a two-pane row so the boundary lands on the fold rather than across
+ * it, and the hinge itself is left empty.
+ *
+ * Fold bounds arrive in window coordinates, but the pane row usually starts after a
+ * NavigationRail and is narrower than the window, so the bounds are translated into
+ * row-local coordinates first: [rowLeft] is the row's left edge in the window and
+ * [rowWidth] its measured width, both in pixels, as are [foldLeft] and [foldRight].
+ *
+ * Returns [FoldAlignedSplit.None] when there is no fold, when the row has not been
+ * measured yet, when the fold falls outside the row, or when aligning to it would
+ * leave one pane too cramped to use. Pure, so it is unit testable without a window or
+ * a Compose runtime.
+ */
+fun foldAlignedPaneSplit(
+    rowLeft: Int,
+    rowWidth: Int,
+    foldLeft: Int?,
+    foldRight: Int?
+): FoldAlignedSplit {
+    if (rowWidth <= 0 || foldLeft == null || foldRight == null) return FoldAlignedSplit.None
+    val localLeft = foldLeft - rowLeft
+    val localRight = foldRight - rowLeft
+    if (localRight < localLeft) return FoldAlignedSplit.None
+    if (localLeft <= 0 || localRight >= rowWidth) return FoldAlignedSplit.None
+
+    // Both panes are measured against the space that is actually drawable: the row
+    // minus the hinge. A fold that would starve either side is not worth aligning to.
+    val hingeWidth = localRight - localLeft
+    val usableWidth = rowWidth - hingeWidth
+    if (usableWidth <= 0) return FoldAlignedSplit.None
+    val fraction = localLeft.toFloat() / usableWidth
+    if (fraction !in MIN_FOLD_PANE_FRACTION..MAX_FOLD_PANE_FRACTION) return FoldAlignedSplit.None
+
+    return FoldAlignedSplit(listWidthPx = localLeft, hingeWidthPx = hingeWidth)
 }
 
 /** Bounds outside which a fold-aligned split would leave a pane too cramped to use. */

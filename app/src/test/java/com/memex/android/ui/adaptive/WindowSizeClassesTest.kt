@@ -4,6 +4,7 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.ui.unit.dp
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -42,40 +43,93 @@ class WindowSizeClassesTest {
     }
 
     @Test
-    fun `pane split lands on a fold near the middle`() {
-        val fraction = listPaneFractionForFold(
-            containerWidth = 1000,
-            foldLeft = 480,
-            fallback = 0.4f
+    fun `pane split lands on the fold in row-local coordinates`() {
+        // A 1000px row that starts 200px into the window, with a 20px hinge at 680.
+        val split = foldAlignedPaneSplit(
+            rowLeft = 200,
+            rowWidth = 1000,
+            foldLeft = 680,
+            foldRight = 700
         )
-        assertEquals(0.48f, fraction, 0.001f)
+        assertEquals(480, split.listWidthPx)
+        assertEquals(20, split.hingeWidthPx)
+    }
+
+    @Test
+    fun `pane split reserves the full hinge width`() {
+        val split = foldAlignedPaneSplit(
+            rowLeft = 0,
+            rowWidth = 1000,
+            foldLeft = 480,
+            foldRight = 520
+        )
+        assertEquals(480, split.listWidthPx)
+        assertEquals(40, split.hingeWidthPx)
     }
 
     @Test
     fun `pane split falls back without a fold`() {
-        assertEquals(
-            0.4f,
-            listPaneFractionForFold(containerWidth = 1000, foldLeft = null, fallback = 0.4f)
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 0,
+                rowWidth = 1000,
+                foldLeft = null,
+                foldRight = null
+            ).listWidthPx
         )
     }
 
     @Test
     fun `pane split falls back when the fold is too close to an edge`() {
-        assertEquals(
-            0.4f,
-            listPaneFractionForFold(containerWidth = 1000, foldLeft = 50, fallback = 0.4f)
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 0,
+                rowWidth = 1000,
+                foldLeft = 50,
+                foldRight = 70
+            ).listWidthPx
         )
-        assertEquals(
-            0.4f,
-            listPaneFractionForFold(containerWidth = 1000, foldLeft = 950, fallback = 0.4f)
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 0,
+                rowWidth = 1000,
+                foldLeft = 930,
+                foldRight = 950
+            ).listWidthPx
         )
     }
 
     @Test
-    fun `pane split falls back for a zero or negative container width`() {
-        assertEquals(
-            0.4f,
-            listPaneFractionForFold(containerWidth = 0, foldLeft = 100, fallback = 0.4f)
+    fun `pane split falls back when the fold sits outside the row`() {
+        // The hinge is left of the pane row, behind the navigation rail.
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 200,
+                rowWidth = 1000,
+                foldLeft = 100,
+                foldRight = 120
+            ).listWidthPx
+        )
+        // The hinge is right of the pane row.
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 200,
+                rowWidth = 1000,
+                foldLeft = 1300,
+                foldRight = 1320
+            ).listWidthPx
+        )
+    }
+
+    @Test
+    fun `pane split falls back before the row has been measured`() {
+        assertNull(
+            foldAlignedPaneSplit(
+                rowLeft = 0,
+                rowWidth = 0,
+                foldLeft = 100,
+                foldRight = 120
+            ).listWidthPx
         )
     }
 }

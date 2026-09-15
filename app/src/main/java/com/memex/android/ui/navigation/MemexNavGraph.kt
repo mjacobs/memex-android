@@ -1,12 +1,15 @@
 package com.memex.android.ui.navigation
 
+import android.graphics.Rect
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.EventRepeat
@@ -27,11 +30,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -43,7 +50,7 @@ import androidx.navigation.compose.rememberNavController
 import com.memex.android.ui.adaptive.currentVerticalFoldBounds
 import com.memex.android.ui.adaptive.currentWindowSupportsTwoPane
 import com.memex.android.ui.adaptive.currentWindowWidthSizeClass
-import com.memex.android.ui.adaptive.listPaneFractionForFold
+import com.memex.android.ui.adaptive.foldAlignedPaneSplit
 import com.memex.android.ui.adaptive.usesNavigationRail
 import com.memex.android.ui.approvals.ApprovalsScreen
 import com.memex.android.ui.approvals.ApprovalsViewModel
@@ -61,6 +68,7 @@ import com.memex.android.ui.settings.SettingsScreen
 import com.memex.android.ui.settings.SettingsViewModel
 import com.memex.android.ui.tasks.TasksScreen
 import com.memex.android.ui.tasks.TasksViewModel
+import kotlin.math.roundToInt
 
 object MemexRoutes {
     const val FEED = "feed"
@@ -118,18 +126,10 @@ fun MemexNavGraph(
     val isTwoPane = currentWindowSupportsTwoPane(widthSizeClass)
 
     // A half-opened foldable's hinge should be the pane boundary, not the fixed 40/60
-    // split — otherwise a pane can render across or behind it. Away from a fold, the
-    // fixed split still applies.
-    val containerWidthPx = LocalWindowInfo.current.containerSize.width
+    // split — otherwise a pane can render across or behind it. The bounds are in window
+    // coordinates; TwoPaneRow translates them into its own. Away from a fold, the fixed
+    // split still applies.
     val foldBounds = currentVerticalFoldBounds()
-    val listPaneWeight = remember(containerWidthPx, foldBounds) {
-        listPaneFractionForFold(
-            containerWidth = containerWidthPx,
-            foldLeft = foldBounds?.left,
-            fallback = LIST_PANE_WEIGHT
-        )
-    }
-    val detailPaneWeight = 1f - listPaneWeight
 
     fun navigateToTab(route: String) {
         if (currentRoute == route) return
@@ -173,8 +173,7 @@ fun MemexNavGraph(
                 chatViewModel = chatViewModel,
                 settingsViewModel = settingsViewModel,
                 isTwoPane = isTwoPane,
-                listPaneWeight = listPaneWeight,
-                detailPaneWeight = detailPaneWeight,
+                foldBounds = foldBounds,
                 onNavigateToTab = { route -> navigateToTab(route) },
                 // The rail sits beside the content rather than over it, so there is no
                 // bar height to reserve.
@@ -215,8 +214,7 @@ fun MemexNavGraph(
                 chatViewModel = chatViewModel,
                 settingsViewModel = settingsViewModel,
                 isTwoPane = false,
-                listPaneWeight = LIST_PANE_WEIGHT,
-                detailPaneWeight = DETAIL_PANE_WEIGHT,
+                foldBounds = null,
                 onNavigateToTab = { route -> navigateToTab(route) },
                 // Only the bottom bar's own height is reserved here.
                 modifier = Modifier
@@ -254,8 +252,7 @@ private fun MemexNavHost(
     chatViewModel: ChatViewModel,
     settingsViewModel: SettingsViewModel,
     isTwoPane: Boolean,
-    listPaneWeight: Float,
-    detailPaneWeight: Float,
+    foldBounds: Rect?,
     onNavigateToTab: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -269,8 +266,7 @@ private fun MemexNavHost(
                 feedViewModel = feedViewModel,
                 captureViewModel = captureViewModel,
                 isTwoPane = isTwoPane,
-                listPaneWeight = listPaneWeight,
-                detailPaneWeight = detailPaneWeight,
+                foldBounds = foldBounds,
                 onSettingsClick = { navController.navigate(MemexRoutes.SETTINGS) }
             )
         }
@@ -299,8 +295,7 @@ private fun MemexNavHost(
             RunsRoute(
                 runsViewModel = runsViewModel,
                 isTwoPane = isTwoPane,
-                listPaneWeight = listPaneWeight,
-                detailPaneWeight = detailPaneWeight,
+                foldBounds = foldBounds,
                 onNoteClick = { noteId ->
                     runsViewModel.clearSelectedRun()
                     feedViewModel.selectNote(noteId)
@@ -326,8 +321,7 @@ private fun FeedRoute(
     captureViewModel: CaptureViewModel,
     onSettingsClick: () -> Unit,
     isTwoPane: Boolean,
-    listPaneWeight: Float = LIST_PANE_WEIGHT,
-    detailPaneWeight: Float = DETAIL_PANE_WEIGHT,
+    foldBounds: Rect? = null,
     modifier: Modifier = Modifier
 ) {
     val feedUiState by feedViewModel.uiState.collectAsState()
@@ -341,38 +335,39 @@ private fun FeedRoute(
     val selectedNote = feedUiState.selectedNote
 
     if (isTwoPane) {
-        Row(modifier = modifier.fillMaxSize()) {
-            FeedScreen(
-                viewModel = feedViewModel,
-                onNoteClick = { noteId -> feedViewModel.selectNote(noteId) },
-                onQuickCaptureClick = { captureViewModel.openCaptureSheet() },
-                onSettingsClick = onSettingsClick,
-                modifier = Modifier
-                    .weight(listPaneWeight)
-                    .fillMaxHeight()
-            )
-            VerticalDivider()
-            Box(
-                modifier = Modifier
-                    .weight(detailPaneWeight)
-                    .fillMaxHeight()
-            ) {
-                if (selectedNote != null) {
-                    // Keyed by note ID so switching notes starts a fresh composition
-                    // instead of reusing the previous note's remembered scroll state.
-                    key(selectedNote.id) {
-                        NoteDetailScreen(
-                            noteId = selectedNote.id,
-                            viewModel = feedViewModel,
-                            onBackClick = { feedViewModel.clearSelectedNote() },
-                            showBackButton = false
+        TwoPaneRow(
+            foldBounds = foldBounds,
+            modifier = modifier,
+            listPane = { paneModifier ->
+                FeedScreen(
+                    viewModel = feedViewModel,
+                    onNoteClick = { noteId -> feedViewModel.selectNote(noteId) },
+                    onQuickCaptureClick = { captureViewModel.openCaptureSheet() },
+                    onSettingsClick = onSettingsClick,
+                    modifier = paneModifier
+                )
+            },
+            detailPane = { paneModifier ->
+                Box(modifier = paneModifier) {
+                    if (selectedNote != null) {
+                        // Keyed by note ID so switching notes starts a fresh composition
+                        // instead of reusing the previous note's remembered scroll state.
+                        key(selectedNote.id) {
+                            NoteDetailScreen(
+                                noteId = selectedNote.id,
+                                viewModel = feedViewModel,
+                                onBackClick = { feedViewModel.clearSelectedNote() },
+                                showBackButton = false
+                            )
+                        }
+                    } else {
+                        EmptyDetailPane(
+                            message = "Pick a note from the feed to read it here."
                         )
                     }
-                } else {
-                    EmptyDetailPane(message = "Pick a note from the feed to read it here.")
                 }
             }
-        }
+        )
         return
     }
 
@@ -400,8 +395,7 @@ private fun RunsRoute(
     onNoteClick: (String) -> Unit,
     onApprovalsClick: () -> Unit,
     isTwoPane: Boolean,
-    listPaneWeight: Float = LIST_PANE_WEIGHT,
-    detailPaneWeight: Float = DETAIL_PANE_WEIGHT,
+    foldBounds: Rect? = null,
     modifier: Modifier = Modifier
 ) {
     val runsUiState by runsViewModel.uiState.collectAsState()
@@ -411,38 +405,39 @@ private fun RunsRoute(
     }
 
     if (isTwoPane) {
-        Row(modifier = modifier.fillMaxSize()) {
-            RoutineRunsScreen(
-                viewModel = runsViewModel,
-                onRunClick = { runId -> runsViewModel.selectRun(runId) },
-                modifier = Modifier
-                    .weight(listPaneWeight)
-                    .fillMaxHeight()
-            )
-            VerticalDivider()
-            Box(
-                modifier = Modifier
-                    .weight(detailPaneWeight)
-                    .fillMaxHeight()
-            ) {
-                val selectedRun = runsUiState.selectedRun
-                if (selectedRun != null) {
-                    // Keyed by run ID so switching runs starts a fresh composition
-                    // instead of reusing the previous run's remembered scroll state.
-                    key(selectedRun.id) {
-                        RunDetailScreen(
-                            viewModel = runsViewModel,
-                            onBackClick = { runsViewModel.clearSelectedRun() },
-                            onNoteClick = onNoteClick,
-                            onApprovalsClick = onApprovalsClick,
-                            showBackButton = false
+        TwoPaneRow(
+            foldBounds = foldBounds,
+            modifier = modifier,
+            listPane = { paneModifier ->
+                RoutineRunsScreen(
+                    viewModel = runsViewModel,
+                    onRunClick = { runId -> runsViewModel.selectRun(runId) },
+                    modifier = paneModifier
+                )
+            },
+            detailPane = { paneModifier ->
+                Box(modifier = paneModifier) {
+                    val selectedRun = runsUiState.selectedRun
+                    if (selectedRun != null) {
+                        // Keyed by run ID so switching runs starts a fresh composition
+                        // instead of reusing the previous run's remembered scroll state.
+                        key(selectedRun.id) {
+                            RunDetailScreen(
+                                viewModel = runsViewModel,
+                                onBackClick = { runsViewModel.clearSelectedRun() },
+                                onNoteClick = onNoteClick,
+                                onApprovalsClick = onApprovalsClick,
+                                showBackButton = false
+                            )
+                        }
+                    } else {
+                        EmptyDetailPane(
+                            message = "Pick a run to replay its agent trace here."
                         )
                     }
-                } else {
-                    EmptyDetailPane(message = "Pick a run to replay its agent trace here.")
                 }
             }
-        }
+        )
         return
     }
 
@@ -460,6 +455,63 @@ private fun RunsRoute(
             onRunClick = { runId -> runsViewModel.selectRun(runId) },
             modifier = modifier
         )
+    }
+}
+
+/**
+ * A list pane and a detail pane side by side, split on the hinge when there is one.
+ *
+ * [foldBounds] arrives in window coordinates while this row may start after a
+ * NavigationRail, so the row measures its own position and width and translates the
+ * bounds into them. The hinge's full width is reserved as an empty gap so neither pane
+ * renders across or behind it; without a usable fold the row falls back to the fixed
+ * 40/60 weights with a plain divider between the panes.
+ */
+@Composable
+private fun TwoPaneRow(
+    foldBounds: Rect?,
+    listPane: @Composable (Modifier) -> Unit,
+    detailPane: @Composable (Modifier) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var rowLeftPx by remember { mutableStateOf(0) }
+    var rowWidthPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+
+    val split = foldAlignedPaneSplit(
+        rowLeft = rowLeftPx,
+        rowWidth = rowWidthPx,
+        foldLeft = foldBounds?.left,
+        foldRight = foldBounds?.right
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                rowLeftPx = coordinates.positionInWindow().x.roundToInt()
+                rowWidthPx = coordinates.size.width
+            }
+    ) {
+        val listWidthPx = split.listWidthPx
+        if (listWidthPx == null) {
+            listPane(Modifier.weight(LIST_PANE_WEIGHT).fillMaxHeight())
+            VerticalDivider()
+            detailPane(Modifier.weight(DETAIL_PANE_WEIGHT).fillMaxHeight())
+        } else {
+            listPane(
+                Modifier
+                    .width(with(density) { listWidthPx.toDp() })
+                    .fillMaxHeight()
+            )
+            // The hinge is occluded hardware, so it gets a gap rather than a divider.
+            Spacer(
+                modifier = Modifier
+                    .width(with(density) { split.hingeWidthPx.toDp() })
+                    .fillMaxHeight()
+            )
+            detailPane(Modifier.weight(1f).fillMaxHeight())
+        }
     }
 }
 

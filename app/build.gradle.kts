@@ -4,6 +4,20 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+/**
+ * Name of the Gradle property that picks the build type the test sources compile and run
+ * against. AGP reads it at configuration time, so a task inside this build cannot set it;
+ * the checks at the bottom of this file re-invoke the wrapper with it instead.
+ */
+val TEST_BUILD_TYPE_PROPERTY = "android.testBuildType"
+
+/** This build's Gradle wrapper, for the checks that have to re-invoke Gradle. */
+val gradleWrapper: String = if (System.getProperty("os.name").startsWith("Windows")) {
+    "$rootDir\\gradlew.bat"
+} else {
+    "$rootDir/gradlew"
+}
+
 android {
     namespace = "com.memex.android"
     compileSdk = 36
@@ -46,15 +60,16 @@ android {
         }
     }
 
-    // NOTE: AGP only ever compiles/runs androidTest and unit-test sources
-    // against a single "test build type" per module (default: `debug`); this
-    // is a hard AGP limitation without adding a product flavor dimension. So
-    // `releaseInstrumented` is not exercised by `./gradlew connectedAndroidTest`
-    // or `testDebugUnitTest` automatically. To actually run the MockWebServer
-    // UI suite against it (e.g. in a dedicated CI job) set
-    //     android.testBuildType = "releaseInstrumented"
-    // for that invocation — which redirects *all* androidTest/unitTest tasks
-    // to this variant, so it should be its own job, not the default one.
+    // AGP only ever compiles/runs androidTest and unit-test sources against a
+    // single "test build type" per module (default: `debug`); this is a hard AGP
+    // limitation without adding a product flavor dimension. So `releaseInstrumented`
+    // is not exercised by an ordinary `./gradlew connectedAndroidTest`, and it takes
+    // its own invocation with the property below, which redirects *all* androidTest
+    // and unit-test tasks onto the minified variant:
+    //     ./gradlew connectedAndroidTest -Pandroid.testBuildType=releaseInstrumented
+    // `minifiedInstrumentedTest` (below) is that invocation, checked in so the
+    // minified variant has a named, repeatable check rather than a comment.
+    testBuildType = providers.gradleProperty(TEST_BUILD_TYPE_PROPERTY).getOrElse("debug")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -85,6 +100,45 @@ android {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+/**
+ * Runs the on-device suite against the R8-minified `releaseInstrumented` variant.
+ *
+ * This is the check that catches a missing keep rule: the default `debug` build never
+ * runs R8, so a Retrofit, kotlinx.serialization, or Compose class stripped or renamed by
+ * minification only shows up here — or in a shipped release. Needs a connected device or
+ * emulator, like any other instrumentation run.
+ */
+tasks.register<Exec>("minifiedInstrumentedTest") {
+    group = "verification"
+    description =
+        "Runs the instrumentation suite against the R8-minified releaseInstrumented variant."
+    workingDir = rootDir
+    commandLine(
+        gradleWrapper,
+        "connectedAndroidTest",
+        "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+    )
+}
+
+/**
+ * Builds — but does not run — the minified app and its test APK.
+ *
+ * Every R8 pass happens here, so this catches a keep rule that breaks the build or
+ * strips a class the test APK links against, and unlike [minifiedInstrumentedTest] it
+ * needs no device.
+ */
+tasks.register<Exec>("assembleMinifiedInstrumentedTest") {
+    group = "verification"
+    description =
+        "Builds the minified releaseInstrumented app and test APKs, running R8, with no device."
+    workingDir = rootDir
+    commandLine(
+        gradleWrapper,
+        ":app:assembleAndroidTest",
+        "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+    )
 }
 
 dependencies {

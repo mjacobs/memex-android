@@ -71,6 +71,29 @@ Android framework classes are stubbed. Anything that needs a real `Bitmap`,
 `ContentResolver`, or Compose tree lives in `app/src/androidTest/` and needs a
 connected device or emulator.
 
+### Checking the minified build
+
+The `release` build runs R8, and the tests above do not: `debug` is never
+minified, so a missing keep rule in `proguard-rules.pro` would first show up as
+a crash in a shipped release. The `releaseInstrumented` build type exists to
+close that gap — it is `release` plus debuggability, so the on-device suite can
+run against minified code.
+
+AGP compiles and runs test sources against one build type per module, so this
+variant takes its own Gradle invocation:
+
+```bash
+./gradlew assembleMinifiedInstrumentedTest  # builds the minified app + test APK (no device)
+./gradlew minifiedInstrumentedTest          # runs the on-device suite against it
+```
+
+Both re-invoke the wrapper with `-Pandroid.testBuildType=releaseInstrumented`,
+which redirects *every* test task onto the minified variant — which is why it is
+a separate command rather than part of the default check. Run at least
+`assembleMinifiedInstrumentedTest` before cutting a release; it needs no device
+and catches keep rules that break the build or strip a class the tests link
+against.
+
 Requires the Android SDK (`compileSdk` 36, `minSdk` 26) with `ANDROID_HOME` or
 `local.properties` pointing at it.
 

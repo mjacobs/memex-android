@@ -11,12 +11,18 @@ plugins {
  */
 val TEST_BUILD_TYPE_PROPERTY = "android.testBuildType"
 
-/** This build's Gradle wrapper, for the checks that have to re-invoke Gradle. */
-val gradleWrapper: String = if (System.getProperty("os.name").startsWith("Windows")) {
-    "$rootDir\\gradlew.bat"
-} else {
-    "$rootDir/gradlew"
-}
+/**
+ * Command prefix that re-invokes this build's Gradle wrapper.
+ *
+ * On Windows the wrapper is a batch script, which `Exec` (and the underlying
+ * `CreateProcess`) cannot launch directly, so it goes through the command interpreter.
+ */
+val gradleWrapperCommand: List<String> =
+    if (System.getProperty("os.name").startsWith("Windows")) {
+        listOf("cmd.exe", "/d", "/c", "$rootDir\\gradlew.bat")
+    } else {
+        listOf("$rootDir/gradlew")
+    }
 
 android {
     namespace = "com.memex.android"
@@ -60,12 +66,13 @@ android {
         }
     }
 
-    // AGP only ever compiles/runs androidTest and unit-test sources against a
-    // single "test build type" per module (default: `debug`); this is a hard AGP
-    // limitation without adding a product flavor dimension. So `releaseInstrumented`
-    // is not exercised by an ordinary `./gradlew connectedAndroidTest`, and it takes
-    // its own invocation with the property below, which redirects *all* androidTest
-    // and unit-test tasks onto the minified variant:
+    // AGP builds the androidTest sources against a single "test build type" per
+    // module (default: `debug`); this is a hard AGP limitation without adding a
+    // product flavor dimension. So `releaseInstrumented` is not exercised by an
+    // ordinary `./gradlew connectedAndroidTest`, and it takes its own invocation
+    // with the property below, which points the androidTest variant at the
+    // minified build type (JVM unit tests keep their own per-build-type tasks,
+    // `testDebugUnitTest` and friends, and are unaffected):
     //     ./gradlew connectedAndroidTest -Pandroid.testBuildType=releaseInstrumented
     // `minifiedInstrumentedTest` (below) is that invocation, checked in so the
     // minified variant has a named, repeatable check rather than a comment.
@@ -116,9 +123,11 @@ tasks.register<Exec>("minifiedInstrumentedTest") {
         "Runs the instrumentation suite against the R8-minified releaseInstrumented variant."
     workingDir = rootDir
     commandLine(
-        gradleWrapper,
-        "connectedAndroidTest",
-        "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+        gradleWrapperCommand +
+            listOf(
+                "connectedAndroidTest",
+                "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+            )
     )
 }
 
@@ -135,9 +144,11 @@ tasks.register<Exec>("assembleMinifiedInstrumentedTest") {
         "Builds the minified releaseInstrumented app and test APKs, running R8, with no device."
     workingDir = rootDir
     commandLine(
-        gradleWrapper,
-        ":app:assembleAndroidTest",
-        "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+        gradleWrapperCommand +
+            listOf(
+                ":app:assembleAndroidTest",
+                "-P$TEST_BUILD_TYPE_PROPERTY=releaseInstrumented"
+            )
     )
 }
 

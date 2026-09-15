@@ -79,7 +79,7 @@ a crash in a shipped release. The `releaseInstrumented` build type exists to
 close that gap — it is `release` plus debuggability, so the on-device suite can
 run against minified code.
 
-AGP compiles and runs test sources against one build type per module, so this
+AGP builds the `androidTest` sources against one build type per module, so this
 variant takes its own Gradle invocation:
 
 ```bash
@@ -87,12 +87,18 @@ variant takes its own Gradle invocation:
 ./gradlew minifiedInstrumentedTest          # runs the on-device suite against it
 ```
 
-Both re-invoke the wrapper with `-Pandroid.testBuildType=releaseInstrumented`,
-which redirects *every* test task onto the minified variant — which is why it is
-a separate command rather than part of the default check. Run at least
-`assembleMinifiedInstrumentedTest` before cutting a release; it needs no device
-and catches keep rules that break the build or strip a class the tests link
-against.
+Both cover the instrumentation (`androidTest`) suite only: they re-invoke the
+wrapper with `-Pandroid.testBuildType=releaseInstrumented`, which points the
+`androidTest` variant at the minified build type. JVM unit tests are not
+affected — they keep a task per build type, so run them separately:
+
+```bash
+./gradlew testDebugUnitTest                 # JVM unit tests (never minified)
+```
+
+Run at least `assembleMinifiedInstrumentedTest` before cutting a release; it
+needs no device and catches keep rules that break the build or strip a class the
+instrumentation tests link against.
 
 Requires the Android SDK (`compileSdk` 36, `minSdk` 26) with `ANDROID_HOME` or
 `local.properties` pointing at it.
